@@ -17,7 +17,8 @@ Run scripts in this order from the project root:
 3. `python src/train_model.py` — trains and evaluates the model
 
 ## Current Status
-Phase 1: Basic pipeline with logistic regression baseline (~38% accuracy, 9 pitch types)
+Phase 1: Basic pipeline with logistic regression baseline (~38% accuracy, 9 pitch types). 
+Added Random Forest w/ prev pitch and count features
 
 ## Roadmap
 - Phase 2: Add batter vs pitcher matchup features, upgrade to XGBoost
