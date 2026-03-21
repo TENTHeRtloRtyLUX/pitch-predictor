@@ -16,9 +16,11 @@ Run scripts in this order from the project root:
 2. `python src/prepare_data.py` — cleans and encodes the data
 3. `python src/train_model.py` — trains and evaluates the model
 
-## Current Status
+## Complete
 Phase 1: Basic pipeline with logistic regression baseline (~38% accuracy, 9 pitch types). 
-Added Random Forest w/ prev pitch and count features
+
+## Current Status
+Phase 2: Added Random Forest w/ prev pitch and count features. Added XGBoost with sample weights and count feature
 
 ## Roadmap
 - Phase 2: Add batter vs pitcher matchup features, upgrade to XGBoost
