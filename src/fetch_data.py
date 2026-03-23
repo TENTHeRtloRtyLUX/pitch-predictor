@@ -1,6 +1,10 @@
 from pybaseball import statcast_pitcher
+from pybaseball import statcast
 import pandas as pd
 import os
+
+from pybaseball import cache
+cache.enable()
 
 PITCHERS = {
     "Gerrit Cole": 543037,
@@ -24,6 +28,17 @@ def fetch_all_pitchers():
     combined = pd.concat(all_data, ignore_index=True)
     return combined
 
+def fetch_batter_stats():
+    df = statcast("2022-04-07", "2022-10-05")
+
+    batter_stats = df.groupby("batter").apply(lambda x: pd.Series({
+        "k_rate": (x["events"] == "strikeout").sum() / max(x["events"].notna().sum(), 1),
+        "bb_rate": (x["events"] == "walk").sum() / max(x["events"].notna().sum(), 1),
+    })).reset_index()
+
+    batter_stats.to_csv("data/batter_stats.csv", index=False)
+
+
 if __name__ == "__main__":
     df = fetch_all_pitchers()
 
@@ -32,5 +47,7 @@ if __name__ == "__main__":
 
     print(f"Data saved to {out_path}")
     print(df["pitch_type"].value_counts())
+
+    fetch_batter_stats()
 
 

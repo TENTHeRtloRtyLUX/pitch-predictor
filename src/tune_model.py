@@ -1,9 +1,8 @@
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import LabelEncoder
-from xgboost import XGBClassifier
-from sklearn.metrics import classification_report, accuracy_score
 from sklearn.utils.class_weight import compute_sample_weight
+from xgboost import XGBClassifier
 
 df = pd.read_csv("data/clean_pitches.csv")
 
@@ -12,7 +11,6 @@ df = pd.get_dummies(df, columns=["p_throws", "stand", "pitcher_name", "prev_pitc
 le_pitch = LabelEncoder()
 df["pitch_type"] = le_pitch.fit_transform(df["pitch_type"])
 
-# Features (X) and target (y)
 X = df.drop(columns=["pitch_type"])
 y = df["pitch_type"]
 
@@ -20,15 +18,24 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_
 
 sample_weights = compute_sample_weight(class_weight="balanced", y=y_train)
 
-model = XGBClassifier(
-    n_estimators=200,
-    max_depth=3,
-    learning_rate=0.2,
-    random_state=42,
-    eval_metric="mlogloss"
-    )
-model.fit(X_train, y_train, sample_weight=sample_weights)
+param_grid = {
+    "n_estimators": [100, 200],
+    "max_depth": [3, 5, 7],
+    "learning_rate": [0.05, 0.1, 0.2],
+}
 
-y_pred = model.predict(X_test)
-print("Accuracy: ", accuracy_score(y_test, y_pred))
-print("\nClassification Report:\n", classification_report(y_test, y_pred, target_names=le_pitch.classes_))
+model = XGBClassifier(random_state = 42, eval_metric="mlogloss")
+
+search = GridSearchCV(
+    model,
+    param_grid,
+    cv=3,
+    scoring="f1_macro",
+    verbose=1,
+    n_jobs=-1,
+)
+
+search.fit(X_train, y_train, sample_weight=sample_weights)
+
+print("\nBest parameters:", search.best_params_)
+print("Best F1 Score:", search.best_score_)
