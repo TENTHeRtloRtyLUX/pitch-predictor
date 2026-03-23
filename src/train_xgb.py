@@ -1,4 +1,5 @@
 import pandas as pd
+import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
@@ -32,3 +33,9 @@ model.fit(X_train, y_train, sample_weight=sample_weights)
 y_pred = model.predict(X_test)
 print("Accuracy: ", accuracy_score(y_test, y_pred))
 print("\nClassification Report:\n", classification_report(y_test, y_pred, target_names=le_pitch.classes_))
+
+joblib.dump(model, "models/xgb_model.pkl")
+joblib.dump(le_pitch, "models/label_encoder.pkl")
+joblib.dump(list(X.columns), "models/feature_columns.pkl")
+
+print("Model saved")
