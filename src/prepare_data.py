@@ -26,6 +26,9 @@ cols_to_keep = [
     "on_1b",
     "on_2b",
     "on_3b",
+    "game_date",
+    "at_bat_number",
+    "pitch_number",
     "prev_pitch",
     "count",
 ]
