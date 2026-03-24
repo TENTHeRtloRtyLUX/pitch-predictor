@@ -1,17 +1,28 @@
 import streamlit as st
 import pandas as pd
 import joblib
+import sys
+sys.path.append("src")
+from mlb_api import get_games_on_date, get_pitches_from_game
+from datetime import date
 
-model = joblib.load("models/xgb_model.pkl")
-le_pitch = joblib.load("models/label_encoder.pkl")
-feature_columns = joblib.load("models/feature_columns.pkl")
+model = joblib.load("models/full_xgb_model.pkl")
+le_pitch = joblib.load("models/full_label_encoder.pkl")
+feature_columns = joblib.load("models/full_feature_columns.pkl")
 
 st.title("MLB Pitch Predictor")
 st.write("Enter the current game situation to predict the next pitch.")
 
+pitcher_df = pd.read_csv("data/clean_full_pitches.csv")
+pitcher_list = sorted(pitcher_df["pitcher_name"].unique().tolist())
 
-pitcher = st.selectbox("Pitcher", ["Gerrit Cole", "Corbin Burnes", "Framber Valdez", "Kevin Gausman"])
-p_throws = st.selectbox("Pitcher Handedness", ["R", "L"])
+pitcher = st.selectbox("Pitcher", pitcher_list)
+
+pitcher_handedness = pitcher_df.groupby("pitcher_name")["p_throws"].first().to_dict()
+
+p_throws = pitcher_handedness.get(pitcher, "R")
+st.write(f"Pitcher throws: **{p_throws}**")
+
 stand = st.selectbox("Batter Stands", ["R", "L"])
 balls = st.slider("Balls", 0, 3, 0)
 strikes = st.slider("Strikes", 0, 2, 0)
@@ -60,3 +71,30 @@ if st.button("Predict Next Pitch"):
     }).sort_values("Probability", ascending=False)
 
     st.dataframe(proba_df)
+
+    st.divider()
+st.header("🔴 Live Game Mode")
+
+selected_date = st.date_input("Select a date", value=date.today())
+
+if st.button("Load Games"):
+    games = get_games_on_date(str(selected_date))
+    
+    if not games:
+        st.warning("No games found for this date.")
+    else:
+        st.session_state["games"] = games
+
+if "games" in st.session_state:
+    games = st.session_state["games"]
+    game_labels = [f"{g['away_team']} @ {g['home_team']} ({g['status']})" for g in games]
+    selected_game = st.selectbox("Select a game", game_labels)
+    
+    game_idx = game_labels.index(selected_game)
+    game_id = games[game_idx]["game_id"]
+    
+    if st.button("Load Pitches"):
+        pitches = get_pitches_from_game(game_id)
+        st.session_state["pitches"] = pitches
+        st.success(f"Loaded {len(pitches)} pitches")
+        st.dataframe(pitches)
