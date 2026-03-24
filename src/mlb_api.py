@@ -2,6 +2,22 @@ import requests
 import pandas as pd
 import os
 import time
+from datetime import date
+
+PITCH_NAMES = {
+    "FF": "4-Seam Fastball",
+    "SI": "Sinker",
+    "FC": "Cutter",
+    "SL": "Slider",
+    "ST": "Sweeper",
+    "CU": "Curveball",
+    "KC": "Knuckle Curve",
+    "CH": "Changeup",
+    "FS": "Splitter",
+    "KN": "Knuckleball",
+    "FA": "Fastball",
+    "FO": "Forkball",
+}
 
 BASE_URL = "https://statsapi.mlb.com/api/v1"
 
@@ -13,12 +29,13 @@ def get_games_on_date(date):
     games = []
     for date_entry in data.get("dates", []):
         for game in date_entry.get("games", []):
-            games.append({
-                "game_id": game["gamePk"],
-                "home_team": game["teams"]["home"]["team"]["name"],
-                "away_team": game["teams"]["away"]["team"]["name"],
-                "status": game["status"]["detailedState"]
-            })
+            if game.get("seriesDescription") in ["Regular Season", "Spring Training", "Wild Card", "Division Series", "Championship Series", "World Series"]:
+                games.append({
+                    "game_id": game["gamePk"],
+                    "home_team": game["teams"]["home"]["team"]["name"],
+                    "away_team": game["teams"]["away"]["team"]["name"],
+                    "status": game["status"]["detailedState"]
+                })
     
     return games
 
@@ -115,17 +132,56 @@ def fetch_season_pitches(year, batch_size=50):
     print(f"Done! {len(existing)} total pitches saved to {out_path}")
     return existing
 
+def get_live_game_state(game_id):
+    url = f"https://statsapi.mlb.com/api/v1.1/game/{game_id}/feed/live"
+    response = requests.get(url)
+    data = response.json()
+    
+    live_data = data.get("liveData", {})
+    plays = live_data.get("plays", {})
+    current_play = plays.get("currentPlay", {})
+    
+    if not current_play:
+        return None
+    
+    matchup = current_play.get("matchup", {})
+    count = current_play.get("count", {})
+    
+    state = {
+        "pitcher": matchup.get("pitcher", {}).get("fullName", ""),
+        "batter": matchup.get("batter", {}).get("fullName", ""),
+        "p_throws": matchup.get("pitchHand", {}).get("code", ""),
+        "stand": matchup.get("batSide", {}).get("code", ""),
+        "balls": count.get("balls", 0),
+        "strikes": count.get("strikes", 0),
+        "outs": count.get("outs", 0),
+        "inning": current_play.get("about", {}).get("inning", 0),
+        "inning_half": current_play.get("about", {}).get("halfInning", ""),
+        "on_1b": int(bool(live_data.get("linescore", {}).get("offense", {}).get("first"))),
+        "on_2b": int(bool(live_data.get("linescore", {}).get("offense", {}).get("second"))),
+        "on_3b": int(bool(live_data.get("linescore", {}).get("offense", {}).get("third"))),
+    }
+    
+    recent_pitches = []
+    for event in current_play.get("playEvents", []):
+        if event.get("isPitch"):
+            recent_pitches.append({
+    "pitch_type": PITCH_NAMES.get(event.get("details", {}).get("type", {}).get("code", ""), event.get("details", {}).get("type", {}).get("code", "")),
+    "description": event.get("details", {}).get("description", ""),
+    "speed": event.get("pitchData", {}).get("startSpeed", ""),
+})
+    
+    state["recent_pitches"] = recent_pitches
+    state["prev_pitch"] = recent_pitches[-1]["pitch_type"] if recent_pitches else "FF"
+    
+    return state
+
 if __name__ == "__main__":
-    games = get_games_on_date("2024-04-15")
+    games = get_games_on_date(str(date.today()))
+    print("Today's games:")
     for g in games:
         print(g)
     
-    # Test pitch pull on first game
-    print("\nPulling pitches from first game...")
-    pitches = get_pitches_from_game(games[0]["game_id"])
-    print(pitches.head())
-    print("Total pitches:", len(pitches))
-    game_ids = get_all_games_for_season(2023)
-    print("First 5 game IDs:", game_ids[:5])
-
-    fetch_season_pitches(2023)
+    if games:
+        state = get_live_game_state(games[0]["game_id"])
+        print("\nGame state:", state)
