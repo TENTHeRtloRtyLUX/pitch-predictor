@@ -5,9 +5,12 @@ import sys
 import time
 from datetime import date
 from huggingface_hub import hf_hub_download
+from supabase import create_client
 
 sys.path.append("src")
 from mlb_api import get_games_on_date, get_live_game_state, PITCH_NAMES
+
+supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 @st.cache_resource
 def load_models():
@@ -27,10 +30,11 @@ overall_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predicto
 hand_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="pitcher_hand_tendencies.csv"))
 count_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="pitcher_count_tendencies.csv"))
 
-# Load pitcher data
-pitcher_df = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="clean_full_pitches.csv"))
-pitcher_list = sorted(pitcher_df["pitcher_name"].unique().tolist())
-pitcher_handedness = pitcher_df.groupby("pitcher_name")["p_throws"].first().to_dict()
+# Load pitcher data from Supabase
+pitcher_response = supabase.table("pitchers").select("name, throws").execute()
+pitcher_df = pd.DataFrame(pitcher_response.data)
+pitcher_list = sorted(pitcher_df["name"].tolist())
+pitcher_handedness = dict(zip(pitcher_df["name"], pitcher_df["throws"]))
 
 def predict_pitch(pitcher, p_throws, stand, balls, strikes, outs, inning, on_1b, on_2b, on_3b, prev_pitch, score_diff=0):
     count = f"{balls}-{strikes}"

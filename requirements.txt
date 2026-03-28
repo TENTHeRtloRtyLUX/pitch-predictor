@@ -6,3 +6,4 @@ joblib
 requests
 numpy
 huggingface_hub
+supabase
