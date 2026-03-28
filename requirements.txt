@@ -1,7 +1,7 @@
 pandas
 scikit-learn
 xgboost
-streamlit
+streamlit>=1.30.0
 joblib
 requests
 numpy
