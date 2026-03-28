@@ -4,20 +4,31 @@ import joblib
 import sys
 import time
 from datetime import date
+from huggingface_hub import hf_hub_download
 
 sys.path.append("src")
 from mlb_api import get_games_on_date, get_live_game_state, PITCH_NAMES
 
-model = joblib.load("models/full_xgb_v2_model.pkl")
-le_pitch = joblib.load("models/full_v2_label_encoder.pkl")
-feature_columns = joblib.load("models/full_v2_feature_columns.pkl")
+@st.cache_resource
+def load_models():
+    model_path = hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="full_xgb_v2_model.pkl")
+    encoder_path = hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="full_v2_label_encoder.pkl")
+    features_path = hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="full_v2_feature_columns.pkl")
+    
+    model = joblib.load(model_path)
+    le_pitch = joblib.load(encoder_path)
+    feature_columns = joblib.load(features_path)
+    
+    return model, le_pitch, feature_columns
 
-overall_tendencies = pd.read_csv("data/pitcher_overall_tendencies.csv")
-hand_tendencies = pd.read_csv("data/pitcher_hand_tendencies.csv")
-count_tendencies = pd.read_csv("data/pitcher_count_tendencies.csv")
+model, le_pitch, feature_columns = load_models()
+
+overall_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="pitcher_overall_tendencies.csv"))
+hand_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="pitcher_hand_tendencies.csv"))
+count_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="pitcher_count_tendencies.csv"))
 
 # Load pitcher data
-pitcher_df = pd.read_csv("data/clean_full_pitches.csv")
+pitcher_df = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="clean_full_pitches.csv"))
 pitcher_list = sorted(pitcher_df["pitcher_name"].unique().tolist())
 pitcher_handedness = pitcher_df.groupby("pitcher_name")["p_throws"].first().to_dict()
 
@@ -85,7 +96,7 @@ with tab1:
         game_id = games[game_idx]["game_id"]
         game_status = games[game_idx]["status"]
         
-        auto_refresh = st.toggle("Auto-refresh every 1!0 seconds", value=False)
+        auto_refresh = st.toggle("Auto-refresh every 10 seconds", value=False)
         
         if st.button("Load Game") or auto_refresh:
             state = get_live_game_state(game_id)

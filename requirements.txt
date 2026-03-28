@@ -1,0 +1,10 @@
+pandas
+scikit-learn
+xgboost
+streamlit
+joblib
+requests
+tensorflow
+numpy
+pybaseball
+huggingface_hub
