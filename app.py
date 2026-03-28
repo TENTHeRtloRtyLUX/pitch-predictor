@@ -84,7 +84,7 @@ tab1, tab2 = st.tabs(["🔴 Live Games", "🎮 Manual Setup"])
 with tab1:
     st.header("Live Game Predictions")
     
-    today = str(date.today())
+    today = st.date_input("Game date", value=date.today()).strftime('%Y-%m-%d')
     games = get_games_on_date(today)
     
     if not games:
