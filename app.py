@@ -30,11 +30,29 @@ overall_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predicto
 hand_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="pitcher_hand_tendencies.csv"))
 count_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="pitcher_count_tendencies.csv"))
 
-# Load pitcher data from Supabase
-pitcher_response = supabase.table("pitchers").select("name, throws").execute()
-pitcher_df = pd.DataFrame(pitcher_response.data)
-pitcher_list = sorted(pitcher_df["name"].tolist())
-pitcher_handedness = dict(zip(pitcher_df["name"], pitcher_df["throws"]))
+@st.cache_resource
+def load_pitcher_data():
+    all_pitchers = []
+    page = 0
+    page_size = 1000
+    
+    while True:
+        response = supabase.table("pitchers").select("name, throws").range(
+            page * page_size, (page + 1) * page_size - 1
+        ).execute()
+        
+        if not response.data:
+            break
+            
+        all_pitchers.extend(response.data)
+        page += 1
+    
+    pitcher_df = pd.DataFrame(all_pitchers)
+    pitcher_list = sorted(pitcher_df["name"].tolist())
+    pitcher_handedness = dict(zip(pitcher_df["name"], pitcher_df["throws"]))
+    return pitcher_list, pitcher_handedness
+
+pitcher_list, pitcher_handedness = load_pitcher_data()
 
 def predict_pitch(pitcher, p_throws, stand, balls, strikes, outs, inning, on_1b, on_2b, on_3b, prev_pitch, score_diff=0):
     count = f"{balls}-{strikes}"
