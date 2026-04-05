@@ -1,5 +1,4 @@
-import os
-import time
+from datetime import datetime, timedelta
 
 import pandas as pd
 import requests
@@ -7,9 +6,18 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 BASE_URL = "https://statsapi.mlb.com/api/v1"
+LIVE_FEED_URL = "https://statsapi.mlb.com/api/v1.1/game"
 REQUEST_TIMEOUT = 20
 MAX_RETRIES = 5
 BACKOFF_FACTOR = 1.5
+ALLOWED_SERIES = {
+    "Regular Season",
+    "Spring Training",
+    "Wild Card",
+    "Division Series",
+    "Championship Series",
+    "World Series",
+}
 
 PITCH_NAMES = {
     "FF": "4-Seam Fastball",
@@ -52,27 +60,83 @@ def fetch_json(url):
     response.raise_for_status()
     return response.json()
 
+
+def normalize_game_record(game, game_date):
+    return {
+        "game_id": game["gamePk"],
+        "game_date": game_date,
+        "season": datetime.strptime(game_date, "%Y-%m-%d").year,
+        "game_type": game.get("gameType"),
+        "home_team": game["teams"]["home"]["team"]["name"],
+        "away_team": game["teams"]["away"]["team"]["name"],
+        "status": game["status"]["detailedState"],
+        "series_description": game.get("seriesDescription", ""),
+    }
+
+
+def iter_games_from_schedule(data, include_statuses=None):
+    include_statuses = set(include_statuses or [])
+    for date_entry in data.get("dates", []):
+        game_date = date_entry["date"]
+        for game in date_entry.get("games", []):
+            if game.get("seriesDescription") not in ALLOWED_SERIES:
+                continue
+            detailed_state = game["status"]["detailedState"]
+            if include_statuses and detailed_state not in include_statuses:
+                continue
+            yield normalize_game_record(game, game_date)
+
+
 def get_games_on_date(date):
-    """Get all game IDs for a given date (format: YYYY-MM-DD)"""
     url = f"{BASE_URL}/schedule?sportId=1&date={date}"
     data = fetch_json(url)
+    return list(iter_games_from_schedule(data))
 
-    games = []
-    for date_entry in data.get("dates", []):
-        for game in date_entry.get("games", []):
-            if game.get("seriesDescription") in ["Regular Season", "Spring Training", "Wild Card", "Division Series", "Championship Series", "World Series"]:
-                games.append({
-                    "game_id": game["gamePk"],
-                    "home_team": game["teams"]["home"]["team"]["name"],
-                    "away_team": game["teams"]["away"]["team"]["name"],
-                    "status": game["status"]["detailedState"]
-                })
 
-    return games
+def get_games_in_date_range(start_date, end_date, game_type="R", include_statuses=None):
+    url = (
+        f"{BASE_URL}/schedule?sportId=1"
+        f"&startDate={start_date}&endDate={end_date}&gameType={game_type}"
+    )
+    data = fetch_json(url)
+    return list(iter_games_from_schedule(data, include_statuses=include_statuses or {"Final"}))
+
+
+def last_day_of_month(day):
+    next_month = (day.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return next_month - timedelta(days=1)
+
+
+def get_games_in_date_range_chunked(start_date, end_date, game_type="R", include_statuses=None):
+    start_day = datetime.strptime(str(start_date), "%Y-%m-%d").date()
+    end_day = datetime.strptime(str(end_date), "%Y-%m-%d").date()
+
+    all_games = []
+    current_day = start_day
+    while current_day <= end_day:
+        chunk_end = min(last_day_of_month(current_day), end_day)
+        all_games.extend(
+            get_games_in_date_range(
+                start_date=current_day.isoformat(),
+                end_date=chunk_end.isoformat(),
+                game_type=game_type,
+                include_statuses=include_statuses,
+            )
+        )
+        current_day = chunk_end + timedelta(days=1)
+
+    deduped_games = {}
+    for game in all_games:
+        deduped_games[game["game_id"]] = game
+
+    return sorted(
+        deduped_games.values(),
+        key=lambda game: (game["game_date"], game["game_id"]),
+    )
+
 
 def get_pitches_from_game(game_id):
-    """Get all pitches from a game with score differential"""
-    url = f"https://statsapi.mlb.com/api/v1.1/game/{game_id}/feed/live"
+    url = f"{LIVE_FEED_URL}/{game_id}/feed/live"
     data = fetch_json(url)
 
     pitches = []
@@ -92,7 +156,7 @@ def get_pitches_from_game(game_id):
         batter_name = matchup.get("batter", {}).get("fullName", "")
         p_throws = matchup.get("pitchHand", {}).get("code", "")
         stand = matchup.get("batSide", {}).get("code", "")
-        is_home = play.get("about", {}).get("isTopInning", True) == False
+        is_home = play.get("about", {}).get("isTopInning", True) is False
         at_bat_index = play.get("about", {}).get("atBatIndex")
         if at_bat_index is None:
             continue
@@ -100,16 +164,19 @@ def get_pitches_from_game(game_id):
         pitch_number = 0
 
         for play_event_index, event in enumerate(play.get("playEvents", [])):
-            if event.get("isPitch"):
-                count = event.get("count", {})
-                pitch_number += 1
+            if not event.get("isPitch"):
+                continue
 
-                if is_home:
-                    score_diff = home_score - away_score
-                else:
-                    score_diff = away_score - home_score
+            count = event.get("count", {})
+            pitch_number += 1
 
-                pitches.append({
+            if is_home:
+                score_diff = home_score - away_score
+            else:
+                score_diff = away_score - home_score
+
+            pitches.append(
+                {
                     "pitch_uid": f"{game_id}:{at_bat_index}:{play_event_index}",
                     "game_id": game_id,
                     "at_bat_index": at_bat_index,
@@ -129,20 +196,20 @@ def get_pitches_from_game(game_id):
                     "on_2b": int(bool(play.get("matchup", {}).get("postOnSecond"))),
                     "on_3b": int(bool(play.get("matchup", {}).get("postOnThird"))),
                     "score_diff": score_diff,
-                })
+                }
+            )
 
     pitch_df = pd.DataFrame(pitches)
     if pitch_df.empty:
         return pitch_df
 
-    pitch_df = pitch_df.sort_values(
+    return pitch_df.sort_values(
         ["game_id", "at_bat_index", "play_event_index"]
     ).reset_index(drop=True)
-    return pitch_df
+
 
 def get_live_game_state(game_id):
-    """Get current state of a live or recent game"""
-    url = f"https://statsapi.mlb.com/api/v1.1/game/{game_id}/feed/live"
+    url = f"{LIVE_FEED_URL}/{game_id}/feed/live"
     data = fetch_json(url)
 
     live_data = data.get("liveData", {})
@@ -158,7 +225,7 @@ def get_live_game_state(game_id):
 
     home_score = linescore.get("teams", {}).get("home", {}).get("runs", 0)
     away_score = linescore.get("teams", {}).get("away", {}).get("runs", 0)
-    is_home = current_play.get("about", {}).get("isTopInning", True) == False
+    is_home = current_play.get("about", {}).get("isTopInning", True) is False
 
     if is_home:
         score_diff = home_score - away_score
@@ -184,76 +251,61 @@ def get_live_game_state(game_id):
     }
 
     recent_pitches = []
-    for event in current_play.get("playEvents", []):
-        if event.get("isPitch"):
-            recent_pitches.append({
-                "pitch_type": PITCH_NAMES.get(
-                    event.get("details", {}).get("type", {}).get("code", ""),
-                    event.get("details", {}).get("type", {}).get("code", "")
-                ),
+    for play_event_index, event in enumerate(current_play.get("playEvents", [])):
+        if not event.get("isPitch"):
+            continue
+        pitch_code = event.get("details", {}).get("type", {}).get("code", "")
+        event_count = event.get("count", {})
+        recent_pitches.append(
+            {
+                "pitch_type": PITCH_NAMES.get(pitch_code, pitch_code),
+                "pitch_code": pitch_code,
                 "description": event.get("details", {}).get("description", ""),
                 "speed": event.get("pitchData", {}).get("startSpeed", ""),
-            })
+                "balls": event_count.get("balls", 0),
+                "strikes": event_count.get("strikes", 0),
+                "outs": event_count.get("outs", 0),
+                "play_event_index": play_event_index,
+            }
+        )
 
     state["recent_pitches"] = recent_pitches
     state["prev_pitch"] = recent_pitches[-1]["pitch_type"] if recent_pitches else "FF"
-
     return state
 
+
 def get_all_games_for_season(year):
-    """Get all game IDs for a full season"""
     url = f"{BASE_URL}/schedule?sportId=1&season={year}&gameType=R"
     data = fetch_json(url)
+    game_records = list(iter_games_from_schedule(data, include_statuses={"Final"}))
+    print(f"Found {len(game_records)} completed games in {year}")
+    return [game["game_id"] for game in game_records]
 
-    game_ids = []
-    for date_entry in data.get("dates", []):
-        for game in date_entry.get("games", []):
-            if game["status"]["detailedState"] == "Final":
-                game_ids.append(game["gamePk"])
-
-    print(f"Found {len(game_ids)} completed games in {year}")
-    return game_ids
 
 def fetch_season_pitches(year, batch_size=50):
-    """Pull pitch data for a full season in batches, saving progress"""
     game_ids = get_all_games_for_season(year)
+    all_batches = []
 
-    out_path = f"data/season_{year}_pitches.csv"
-
-    if os.path.exists(out_path):
-        existing = pd.read_csv(out_path)
-        done_games = set(existing["game_id"].unique())
-        print(f"Resuming — {len(done_games)} games already pulled")
-    else:
-        existing = pd.DataFrame()
-        done_games = set()
-
-    remaining = [g for g in game_ids if g not in done_games]
-    print(f"{len(remaining)} games remaining")
-
-    for i in range(0, len(remaining), batch_size):
-        batch = remaining[i:i+batch_size]
+    for start_idx in range(0, len(game_ids), batch_size):
+        batch = game_ids[start_idx : start_idx + batch_size]
         batch_data = []
 
         for game_id in batch:
             try:
                 pitches = get_pitches_from_game(game_id)
-                pitches["game_id"] = game_id
-                batch_data.append(pitches)
-            except Exception as e:
-                print(f"  Failed game {game_id}: {e}")
-                continue
+                if not pitches.empty:
+                    batch_data.append(pitches)
+            except Exception as exc:
+                print(f"Failed game {game_id}: {exc}")
 
         if batch_data:
-            batch_df = pd.concat(batch_data, ignore_index=True)
-            existing = pd.concat([existing, batch_df], ignore_index=True)
-            existing.to_csv(out_path, index=False)
-            print(f"Saved batch {i//batch_size + 1} — {len(existing)} total pitches")
+            all_batches.append(pd.concat(batch_data, ignore_index=True))
 
-        time.sleep(1)
+    if not all_batches:
+        return pd.DataFrame()
 
-    print(f"Done! {len(existing)} total pitches saved to {out_path}")
-    return existing
+    return pd.concat(all_batches, ignore_index=True)
+
 
 if __name__ == "__main__":
     fetch_season_pitches(2023)

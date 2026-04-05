@@ -11,3 +11,4 @@ supabase
 python-dotenv
 lightgbm
 catboost
+tensorflow

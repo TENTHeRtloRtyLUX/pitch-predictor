@@ -1,0 +1,9 @@
+{
+  "name": "transformer_sequence",
+  "model_type": "transformer",
+  "model_filename": "transformer_sequence.keras",
+  "label_encoder_filename": "transformer_sequence_label_encoder.pkl",
+  "metrics_filename": "transformer_sequence_metrics.json",
+  "preprocessor_filename": "transformer_sequence_preprocessor.pkl",
+  "split_manifest_filename": "transformer_sequence_split.json"
+}

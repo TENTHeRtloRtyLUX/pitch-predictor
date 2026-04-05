@@ -1,0 +1,9 @@
+{
+  "name": "lstm_sequence",
+  "model_type": "lstm",
+  "model_filename": "lstm_sequence.keras",
+  "label_encoder_filename": "lstm_sequence_label_encoder.pkl",
+  "metrics_filename": "lstm_sequence_metrics.json",
+  "preprocessor_filename": "lstm_sequence_preprocessor.pkl",
+  "split_manifest_filename": "lstm_sequence_split.json"
+}

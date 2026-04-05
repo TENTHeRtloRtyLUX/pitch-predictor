@@ -1,0 +1,62 @@
+name: Weekly Retrain
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_enabled:
+        description: Upload to Hugging Face after checks pass
+        required: true
+        default: "false"
+      accuracy_drop_threshold:
+        description: Maximum allowed best-accuracy regression before upload is blocked
+        required: true
+        default: "0.02"
+  schedule:
+    - cron: "0 9 * * 1"
+
+concurrency:
+  group: pitch-predictor-weekly-retrain
+  cancel-in-progress: false
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      ACCURACY_DROP_THRESHOLD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.accuracy_drop_threshold || '0.02' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run weekly retrain
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.upload_enabled }}" = "true" ]; then
+            python src/run_weekly_retrain.py --accuracy-drop-threshold "$ACCURACY_DROP_THRESHOLD"
+          else
+            python src/run_weekly_retrain.py --no-upload --accuracy-drop-threshold "$ACCURACY_DROP_THRESHOLD"
+          fi
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-retrain-artifacts
+          path: |
+            output/weekly_retrain_summary.json
+            output/weekly_retrain_state.json
+            output/pitch_ingest_latest_summary.json
+            output/*.log
+          if-no-files-found: warn

@@ -1,29 +1,17 @@
 # MLB Pitch Predictor
 
-A Streamlit app that predicts what pitch an MLB pitcher will throw next based on game state, count, pitcher tendencies, and matchup context.
+A Streamlit app and retraining pipeline for predicting the next MLB pitch from game state, pitcher tendencies, and within-at-bat sequence context.
 
 Live app: [pitch-predictor.streamlit.app](https://pitch-predictor.streamlit.app)
 
 ## Overview
 
-The app now supports multiple trained models side by side. At the top of the app, a model leaderboard shows the saved evaluation accuracy for every model currently available in the registry. Users can then select any subset of those models and compare their predictions in both live-game and manual modes.
+The project now supports:
 
-The project has also moved away from a local CSV-first workflow and toward a Supabase-backed training pipeline:
-
-- MLB Stats API is the source for historical and live pitch data
-- Supabase stores the compact retained pitch-level training dataset
-- feature preparation and tendency generation now run in memory
-- the app can load either local model bundles or uploaded Hugging Face artifacts
-
-## Features
-
-- Live game mode for current MLB matchups
-- Manual setup mode for custom situations
-- Multi-model pitch prediction comparison
-- Model accuracy leaderboard shown directly in the app
-- Pitch-type probability outputs, not just a single class prediction
-- Pitcher tendency features by overall usage, batter handedness, and count
-- Supabase-backed historical pitch data for centralized retraining
+- incremental MLB ingest into Supabase with a persisted overlap watermark
+- weekly retraining orchestration with guardrails and staged promotion
+- side-by-side tabular, LSTM, and transformer model bundles
+- runtime model routing in the app based on `model_type`
 
 ## Tech Stack
 
@@ -31,128 +19,122 @@ The project has also moved away from a local CSV-first workflow and toward a Sup
 - Data ingestion: MLB Stats API
 - Data storage: Supabase
 - Model hosting: Hugging Face
-- ML libraries: scikit-learn, XGBoost, LightGBM, CatBoost
+- ML libraries: scikit-learn, XGBoost, LightGBM, CatBoost, TensorFlow
 
 ## Project Structure
 
-### Active Runtime
+### Runtime
 | File | Description |
 |------|-------------|
-| `app.py` | Main Streamlit application with live and manual prediction flows |
-| `src/mlb_api.py` | Fetches schedules, live game state, and historical pitch logs from the MLB Stats API |
+| `app.py` | Streamlit application with tabular and sequence model inference routing |
+| `src/mlb_api.py` | MLB Stats API client for schedule, live state, and pitch event retrieval |
 
-### Active Data Pipeline
+### Data Pipeline
 | File | Description |
 |------|-------------|
-| `src/load_to_supabase.py` | Loads compact pitch-level training data into Supabase |
-| `src/supabase_data_loader.py` | Reads retained training data back from Supabase for model training |
-| `src/prepare_full_data.py` | Reusable in-memory pitch preparation functions |
-| `src/build_pitcher_tendencies.py` | Builds pitcher tendency feature tables in memory |
-| `src/merge_tendencies.py` | Merges tendency features into the prepared pitch dataset |
-| `src/training_data_pipeline.py` | Shared training-data entrypoint for all tabular models |
+| `src/load_to_supabase.py` | Incremental overlap ingest with watermark state, locking, dry-run mode, and run summaries |
+| `src/supabase_data_loader.py` | Loads retained pitch rows from Supabase for training |
+| `src/training_data_pipeline.py` | Shared tabular and sequence training-data builders plus tendency file refresh |
+| `src/prepare_full_data.py` | Reusable pitch-cleaning helpers |
 
-### Active Training and Packaging
+### Training and Packaging
 | File | Description |
 |------|-------------|
-| `src/tabular_training.py` | Shared tabular feature preparation and train/test helpers |
-| `src/train_tabular_models.py` | Trains the active tabular model suite |
-| `src/build_model_registry.py` | Builds a registry of trained models and saved metrics |
-| `src/upload_models.py` | Uploads model bundles, metrics, tendencies, and registry files to Hugging Face |
+| `src/train_tabular_models.py` | Trains the tabular model suite and writes bundle metadata |
+| `src/train_sequence_models.py` | Trains LSTM or transformer sequence models |
+| `src/build_model_registry.py` | Builds the registry from saved bundle metadata and metrics |
+| `src/upload_models.py` | Uploads model bundles, metrics, registry, and tendency files to Hugging Face |
+| `src/run_weekly_retrain.py` | Weekly orchestration entrypoint with staging, guardrails, and persistent run state |
 
-### Legacy
+## Ingest Workflow
 
-Older experiments and superseded scripts live under `src/legacy/`.
+The primary ingest command is now incremental:
 
-## Canonical Training Schema
+```bash
+python src/load_to_supabase.py --dry-run
+python src/load_to_supabase.py
+```
 
-The retained `pitches` dataset is intentionally compact. The active training pipeline expects:
+Behavior:
 
-- `id`
-- `pitch_uid`
-- `game_id`
-- `season`
-- `at_bat_index`
-- `pitcher_name`
-- `batter_name`
-- `p_throws`
-- `stand`
-- `pitch_type`
-- `balls`
-- `strikes`
-- `outs`
-- `inning`
-- `on_1b`
-- `on_2b`
-- `on_3b`
-- `score_diff`
-- `at_bat_number`
-- `play_event_index`
-- `pitch_number`
-- `prev_pitch`
-- `count`
+- reads the last successful watermark
+- computes `start_date = max(last_ingested_game_date - overlap_days, season_start)`
+- fetches final games in that window
+- upserts pitches by `pitch_uid`
+- commits the watermark only after the full run succeeds
+- writes the latest summary to `output/pitch_ingest_latest_summary.json`
 
-Sequence-related fields are now expected to come from true MLB play/event order rather than being reconstructed from batter-name changes.
+If the `pipeline_state` table is unavailable in Supabase, the script falls back to `output/pitch_ingest_state.json`.
 
-## Local Development
+Recommended Supabase setup:
 
-1. Create a virtual environment: `python -m venv venv`
-2. Activate it: `venv\Scripts\activate` on Windows or `source venv/bin/activate` on macOS/Linux
-3. Install dependencies: `pip install -r requirements.txt`
-4. Create a `.env` file for training scripts with:
-   - `SUPABASE_URL`
-   - `SUPABASE_KEY`
-   - `HF_TOKEN` when you want to upload artifacts
-5. Create `.streamlit/secrets.toml` for the Streamlit app with:
-   - `SUPABASE_URL`
-   - `SUPABASE_KEY`
-6. Run the app locally: `streamlit run app.py`
+- unique constraint on `pitches.pitch_uid`
+- optional `pipeline_state` table keyed by `pipeline_name`
 
-## Training Workflow
+## Retraining Workflow
 
-The current retraining flow is:
+Manual local workflow:
 
-1. Update Supabase from the MLB Stats API with `python src/load_to_supabase.py`
-2. Train the tabular models with `python src/train_tabular_models.py`
-3. Rebuild the registry with `python src/build_model_registry.py`
-4. Upload selected artifacts with `python src/upload_models.py`
+```bash
+python src/load_to_supabase.py
+python src/training_data_pipeline.py
+python src/train_tabular_models.py
+python src/train_sequence_models.py --model-type lstm
+python src/train_sequence_models.py --model-type transformer
+python src/build_model_registry.py
+python src/upload_models.py
+```
 
-The app will prefer:
+Weekly orchestration:
 
-- local `models/model_registry.json` and local model bundles when present
-- otherwise a remote `model_registry.json` from Hugging Face
-- otherwise a single fallback XGBoost v2 model
+```bash
+python src/run_weekly_retrain.py --no-upload
+python src/run_weekly_retrain.py
+```
 
-For tendency tables, the app prefers local `data/*.csv` files when available and falls back to Hugging Face otherwise.
+Guardrails in the weekly flow:
 
-## Active Models
+- fail-fast lock to prevent overlapping runs
+- per-step and global timeout budgets
+- staging directories so previous production bundles remain untouched until checks pass
+- regression guard that blocks upload if the new best tabular accuracy drops past the threshold
+- persistent run state in `output/weekly_retrain_state.json`
+- latest run summary in `output/weekly_retrain_summary.json`
 
-The active tabular training pipeline supports:
+## Model Types
 
-- Logistic Regression
-- SGDClassifier
-- Random Forest
-- XGBoost
-- LightGBM
-- CatBoost
-- Calibrated XGBoost
+The registry now supports:
 
-Tabular preprocessing uses sparse feature matrices with hashing for high-cardinality categorical values so retraining scales better as historical data grows.
+- `tabular`
+- `lstm`
+- `transformer`
 
-Any trained model with a complete bundle and saved metrics can appear in the app and in the model leaderboard.
+Tabular models use the saved sparse feature preprocessor.
+
+Sequence models use:
+
+- prior pitches in the same at-bat as sequence input
+- current pitch context as static features
+- game-level train/test splitting
+
+## GitHub Actions
+
+The repo includes a weekly scheduled workflow and manual dispatch entrypoint in `.github/workflows/weekly_retrain.yml`.
+
+Required secrets:
+
+- `SUPABASE_URL`
+- `SUPABASE_KEY`
+- `HF_TOKEN`
+
+Artifacts uploaded on every run:
+
+- weekly retrain summary
+- ingest summary
+- failure logs when present
 
 ## Notes
 
-- Accuracy shown in the app is the most recent saved evaluation accuracy from the latest training run.
-- Local and deployed apps can show different model sets if the local registry and the remote Hugging Face registry are out of sync.
-- Sequence models like LSTM and transformers are planned next once the shared data pipeline and comparison flow are stable.
-
-## Roadmap
-
-- [x] Live MLB game integration
-- [x] Supabase-backed runtime data
-- [x] Shared in-memory tabular training pipeline
-- [x] Multi-model tabular training support
-- [x] Model comparison UI in Streamlit
-- [ ] Scheduled retraining and tendency refresh workflow
-- [ ] Sequence modeling with LSTM
-- [ ] Transformer-based pitch sequence modeling
+- Local and deployed registries can diverge if uploads are skipped.
+- Sequence models depend on TensorFlow being installed in the environment.
+- The app still falls back to a single legacy XGBoost bundle if no registry is available.

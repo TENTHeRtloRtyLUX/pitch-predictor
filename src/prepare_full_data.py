@@ -6,6 +6,15 @@ def filter_valid_pitches(df, valid_pitches=None):
     valid_pitches = valid_pitches or DEFAULT_VALID_PITCHES
     return df[df["pitch_type"].isin(valid_pitches)].copy()
 
+
+def filter_valid_counts(df):
+    df = df.copy()
+    return df[
+        df["balls"].between(0, 3)
+        & df["strikes"].between(0, 2)
+        & df["outs"].between(0, 2)
+    ].copy()
+
 def add_count_feature(df):
     df = df.copy()
     df["count"] = df["balls"].astype(str) + "-" + df["strikes"].astype(str)
@@ -40,6 +49,7 @@ def prepare_pitch_data(df, valid_pitches=None, drop_first_pitch=True):
         df = df.rename(columns={"outs_when_up": "outs"})
 
     df = filter_valid_pitches(df, valid_pitches)
+    df = filter_valid_counts(df)
     df = add_count_feature(df)
     df = add_at_bat_and_pitch_features(df)
 
