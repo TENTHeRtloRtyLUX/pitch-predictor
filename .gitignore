@@ -7,3 +7,4 @@ __pycache__/
 *.keras
 
 .streamlit/secrets.toml
+output/
