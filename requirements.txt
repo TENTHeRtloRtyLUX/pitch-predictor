@@ -7,3 +7,6 @@ requests
 numpy
 huggingface_hub
 supabase
+python-dotenv
+lightgbm
+catboost

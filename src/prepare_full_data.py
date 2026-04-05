@@ -1,43 +1,47 @@
 import pandas as pd
 
-df = pd.read_csv("data/season_2023_pitches.csv")
+DEFAULT_VALID_PITCHES = ["FF", "SL", "SI", "CH", "FC", "CU", "ST", "FS", "KC"]
 
-print("Raw shape:", df.shape)
-print("Columns:", df.columns.tolist())
-print("\nPitch types:\n", df["pitch_type"].value_counts())
-print("\nSample:\n", df.head())
+def filter_valid_pitches(df, valid_pitches=None):
+    valid_pitches = valid_pitches or DEFAULT_VALID_PITCHES
+    return df[df["pitch_type"].isin(valid_pitches)].copy()
 
-df = df.rename(columns={"outs": "outs_when_up"})
+def add_count_feature(df):
+    df = df.copy()
+    df["count"] = df["balls"].astype(str) + "-" + df["strikes"].astype(str)
+    return df
 
-min_samples = 5000
-pitch_counts = df["pitch_type"].value_counts()
-valid_pitches = pitch_counts[pitch_counts >= min_samples].index
-df = df[df["pitch_type"].isin(valid_pitches)]
-print(f"\nAfter filtering rare pitches: {len(df)} rows")
-print("Remaining pitch types:\n", df["pitch_type"].value_counts())
+def add_at_bat_and_pitch_features(df):
+    df = df.copy()
 
-df["count"] = df["balls"].astype(str) + "-" + df["strikes"].astype(str)
+    df = df.sort_values(["game_id", "pitcher_name", "batter_name"]).reset_index(drop=True)
 
-df = df.sort_values(["game_id", "pitcher_name", "batter_name"])
+    df["at_bat_number"] = (df.groupby("game_id")["batter_name"].transform(lambda x: (x != x.shift()).cumsum()))
 
-df["at_bat_number"] = (
-    df.groupby("game_id")["batter_name"]
-    .transform(lambda x: (x != x.shift()).cumsum())
-)
+    df["pitch_number"] = df.groupby(["game_id", "at_bat_number"]).cumcount() + 1
 
-df["pitch_number"] = df.groupby(
-    ["game_id", "at_bat_number"]
-).cumcount() + 1
+    df = df.sort_values(["game_id", "at_bat_number", "pitch_number"]).reset_index(drop=True)
 
-df = df.sort_values(["game_id", "at_bat_number", "pitch_number"])
-df["prev_pitch"] = df.groupby(
-    ["game_id", "at_bat_number"]
-)["pitch_type"].shift(1)
+    df["prev_pitch"] = df.groupby(["game_id", "at_bat_number"])["pitch_type"].shift(1)
 
-df = df.dropna(subset=["prev_pitch", "pitch_type"])
+    return df
 
-print("\nFinal shape:", df.shape)
-print("\nSample:\n", df.head())
+def prepare_pitch_data(df, valid_pitches=None, drop_first_pitch=True):
+    df = df.copy()
 
-df.to_csv("data/clean_full_pitches.csv", index=False)
-print("\nSaved to data/clean_full_pitches.csv")
+    if "outs_when_up" in df.columns and "outs" not in df.columns:
+        df = df.rename(columns={"outs_when_up": "outs"})
+
+    df = filter_valid_pitches(df, valid_pitches)
+    df = add_count_feature(df)
+    df = add_at_bat_and_pitch_features(df)
+
+    if drop_first_pitch:
+        df = df.dropna(subset=["prev_pitch", "pitch_type"]).reset_index(drop=True)
+
+    return df
+
+if __name__ == "__main__":
+    raise SystemExit(
+        "This module now provides reusable functions. Import and call prepare_pitch_data(df)."
+    )

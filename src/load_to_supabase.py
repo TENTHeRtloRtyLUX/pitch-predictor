@@ -34,7 +34,6 @@ def clean_season_data(df, season):
     return df
 
 def get_done_games(season):
-    """Get already uploaded game IDs from dedicated table — paginated"""
     all_games = []
     page = 0
     page_size = 1000
@@ -53,12 +52,10 @@ def get_done_games(season):
     return set(r["game_id"] for r in all_games)
 
 def mark_games_done(game_ids, season):
-    """Mark games as uploaded in dedicated table"""
     records = [{"game_id": gid, "season": season} for gid in game_ids]
     supabase.table("uploaded_games").upsert(records, on_conflict="game_id").execute()
 
 def upsert_pitchers(df):
-    """Extract and upsert pitchers from current batch — no full table scan needed"""
     pitcher_df = df[["pitcher_name", "p_throws"]].drop_duplicates()
     pitcher_df = pitcher_df.rename(columns={"pitcher_name": "name", "p_throws": "throws"})
     records = pitcher_df.to_dict(orient="records")
@@ -100,7 +97,6 @@ def upload_season(season, batch_size=5000):
                 "prev_pitch", "count", "pitch_number", "at_bat_number"]
         batch_df = batch_df[cols]
 
-        # Upload pitches
         records = batch_df.to_dict(orient="records")
         for j in range(0, len(records), batch_size):
             chunk = records[j:j+batch_size]
@@ -108,10 +104,8 @@ def upload_season(season, batch_size=5000):
                 chunk, on_conflict="game_id,at_bat_number,pitch_number"
             ).execute()
 
-        # Update pitchers from this batch
         upsert_pitchers(batch_df)
 
-        # Mark games as done
         mark_games_done(list(set(batch_games)), season)
 
         print(f"  Batch {i//50 + 1} — {min(i+50, len(remaining))}/{len(remaining)} games")

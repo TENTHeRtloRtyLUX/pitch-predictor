@@ -1,78 +1,138 @@
-# ⚾ MLB Pitch Predictor
+# MLB Pitch Predictor
 
-A machine learning app that predicts what pitch an MLB pitcher will throw next based on game situation, count, pitcher tendencies, and batter matchup.
+A Streamlit app that predicts what pitch an MLB pitcher will throw next based on game state, count, pitcher tendencies, and matchup context.
 
-**🔴 Live App:** [pitch-predictor.streamlit.app](https://pitch-predictor.streamlit.app)
+Live app: [pitch-predictor.streamlit.app](https://pitch-predictor.streamlit.app)
+
+## Current Direction
+
+The project is moving from a local CSV-based workflow to a Supabase-backed training pipeline:
+
+- MLB Stats API is the source for historical and live pitch data
+- Supabase stores the compact retained pitch-level training dataset
+- in-memory preparation steps build tendency features without depending on saved local CSVs
+- multiple tabular models can be trained from the same prepared dataset
+
+This keeps the runtime app lightweight while making retraining and model comparison easier to manage.
 
 ## Features
 
-- **Live Game Mode** - Select any MLB game and get real-time pitch predictions
-- **Manual Setup Mode** - Configure any game situation manually to explore predictions
-- **XGBoost Model** - Trained on 478,000+ pitches from the 2023 MLB season
-- **9 Pitch Types** - Predicts fastballs, sliders, curveballs, changeups, and more
+- Live game mode for current MLB matchups
+- Manual setup mode for custom situations
+- Pitch-type probability outputs, not just a single class prediction
+- Pitcher tendency features by overall usage, batter handedness, and count
+- Supabase-backed historical pitch data for centralized retraining
+- Shared multi-model training pipeline for side-by-side comparison
 
 ## Tech Stack
 
-- **Frontend:** Streamlit
-- **ML Model:** XGBoost (~39% accuracy across 9 pitch types)
-- **Data:** MLB Stats API (live games), Supabase (pitcher data)
-- **Hosting:** Streamlit Cloud, HuggingFace (model files)
+- Frontend: Streamlit
+- Data ingestion: MLB Stats API
+- Data storage: Supabase
+- Model hosting: Hugging Face
+- ML libraries: scikit-learn, XGBoost, LightGBM, CatBoost
 
 ## Project Structure
 
-### Active (Runtime)
+### Active Runtime
 | File | Description |
 |------|-------------|
-| `app.py` | Main Streamlit web application with live game and manual prediction modes |
-| `src/mlb_api.py` | Fetches live game data from MLB Stats API |
-| `src/load_to_supabase.py` | Loads pitcher and pitch data into Supabase database |
+| `app.py` | Main Streamlit application |
+| `src/mlb_api.py` | Fetches schedules, live game state, and historical game pitch logs from the MLB Stats API |
 
-### Pipeline (Data & Training)
+### Active Data Pipeline
 | File | Description |
 |------|-------------|
-| `src/fetch_data.py` | Downloads raw Statcast pitch data from Baseball Savant |
-| `src/prepare_full_data.py` | Full data preparation including tendency features |
-| `src/build_pitcher_tendencies.py` | Generates pitcher tendency CSV files from pitch data |
-| `src/merge_tendencies.py` | Merges tendency data with pitch records |
-| `src/train_full_xgb_v2.py` | Trains the XGBoost v2 model (current deployed model) |
-| `src/upload_models.py` | Uploads trained models to HuggingFace Hub |
+| `src/load_to_supabase.py` | Loads compact pitch-level training data into Supabase |
+| `src/supabase_data_loader.py` | Reads retained training data back from Supabase for model training |
+| `src/prepare_full_data.py` | Reusable in-memory pitch preparation functions |
+| `src/build_pitcher_tendencies.py` | Builds pitcher tendency feature tables in memory |
+| `src/merge_tendencies.py` | Merges tendency features into the prepared pitch dataset |
+| `src/training_data_pipeline.py` | Shared training-data entrypoint for all tabular models |
 
-### Legacy (Experimental/Outdated)
+### Active Training and Packaging
 | File | Description |
 |------|-------------|
-| `src/prepare_data.py` | *[Legacy]* Basic data cleaning, replaced by prepare_full_data.py |
-| `src/train_model.py` | *[Legacy]* Original logistic regression model |
-| `src/train_rf.py` | *[Legacy]* Random Forest experiment |
-| `src/train_xgb.py` | *[Legacy]* Basic XGBoost experiment |
-| `src/train_full_xgb.py` | *[Legacy]* XGBoost v1, replaced by v2 |
-| `src/train_lstm.py` | *[Legacy]* LSTM sequence model experiment |
-| `src/train_hybrid.py` | *[Legacy]* Hybrid XGBoost + LSTM experiment |
-| `src/tune_model.py` | *[Legacy]* Hyperparameter tuning script |
-| `src/explore_data.py` | *[Legacy]* Data exploration script |
+| `src/tabular_training.py` | Shared tabular feature preparation and train/test helpers |
+| `src/train_tabular_models.py` | Trains the active tabular model suite |
+| `src/build_model_registry.py` | Builds a registry of available trained models and metrics |
+| `src/upload_models.py` | Uploads selected model artifacts to Hugging Face |
+
+### Legacy
+
+Older experiments and superseded scripts live under `src/legacy/`.
+
+## Canonical Training Schema
+
+The retained `pitches` dataset is intentionally compact. The active training pipeline expects:
+
+- `id`
+- `game_id`
+- `season`
+- `pitcher_name`
+- `batter_name`
+- `p_throws`
+- `stand`
+- `pitch_type`
+- `balls`
+- `strikes`
+- `outs`
+- `inning`
+- `on_1b`
+- `on_2b`
+- `on_3b`
+- `score_diff`
+- `at_bat_number`
+- `pitch_number`
+- `prev_pitch`
+- `count`
 
 ## Local Development
 
-1. Clone the repo
-2. Create a virtual environment: `python -m venv venv`
-3. Activate it: `venv\Scripts\activate` (Windows) or `source venv/bin/activate` (Mac/Linux)
-4. Install dependencies: `pip install -r requirements.txt`
-5. Create `.env` file with your Supabase credentials
-6. Run: `streamlit run app.py`
+1. Create a virtual environment: `python -m venv venv`
+2. Activate it: `venv\Scripts\activate` on Windows or `source venv/bin/activate` on macOS/Linux
+3. Install dependencies: `pip install -r requirements.txt`
+4. Create a `.env` file with your Supabase credentials and any model-hosting tokens you need
+5. Run the app: `streamlit run app.py`
 
-## Model Training
+## Training Workflow
 
-To retrain the model with new data:
-1. `python src/fetch_data.py` — pulls Statcast data
-2. `python src/prepare_full_data.py` — cleans and prepares data with tendencies
-3. `python src/train_full_xgb_v2.py` — trains the XGBoost model
-4. `python src/upload_models.py` — uploads model to HuggingFace
+The current retraining flow is:
+
+1. Update Supabase from the MLB Stats API with `python src/load_to_supabase.py`
+2. Build the shared training dataset in memory from retained seasons
+3. Train the tabular models with `python src/train_tabular_models.py`
+4. Build the model registry with `python src/build_model_registry.py`
+5. Upload selected artifacts with `python src/upload_models.py`
+
+The intended cadence is:
+
+- ingest new pitches regularly
+- refresh tendency features on each retrain
+- retrain the heavier models on a schedule rather than after every update
+- reserve more frequent updates for lighter online-friendly baselines
+
+## Active Models
+
+The active tabular training pipeline is set up for:
+
+- Logistic Regression
+- SGDClassifier
+- Random Forest
+- XGBoost
+- LightGBM
+- CatBoost
+- Calibrated XGBoost
+
+Sequence models like LSTM and transformers are planned next once the shared data pipeline and model comparison flow are in place.
 
 ## Roadmap
 
-- [x] XGBoost model with pitcher tendencies
 - [x] Live MLB game integration
-- [x] Streamlit Cloud deployment
-- [x] Supabase database integration
-- [ ] Auto-update pipeline (GitHub Actions)
-- [ ] Improve model accuracy (more features, more data)
-- [ ] LSTM sequence modeling for pitch sequences
+- [x] Supabase-backed runtime data
+- [x] Shared in-memory tabular training pipeline
+- [x] Multi-model tabular training support
+- [ ] Model comparison UI in Streamlit
+- [ ] Scheduled retraining and tendency refresh workflow
+- [ ] Sequence modeling with LSTM
+- [ ] Transformer-based pitch sequence modeling

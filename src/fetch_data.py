@@ -1,53 +1,38 @@
-from pybaseball import statcast_pitcher
-from pybaseball import statcast
 import pandas as pd
+from supabase import create_client
 import os
+from dotenv import load_dotenv
 
-from pybaseball import cache
-cache.enable()
+load_dotenv()
 
-PITCHERS = {
-    "Gerrit Cole": 543037,
-    "Corbin Burnes": 669203,
-    "Framber Valdez": 664285,
-    "Kevin Gausman": 592332,
-}
+supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
-START_DATE = "2023-03-30"
-END_DATE = "2023-10-01"
+def fetch_all_pitches():
+    all_pitches = []
+    page = 0
+    page_size = 1000
 
-def fetch_all_pitchers():
-    all_data = []
+    while True:
+        response = supabase.table("pitches").select("*").range(
+            page * page_size, (page + 1) * page_size - 1
+        ).execute()
 
-    for name, pid in PITCHERS.items():
-        print(f"Data for {name}")
-        df = statcast_pitcher(START_DATE, END_DATE, pid)
-        df["pitcher_name"] = name
-        all_data.append(df)
+        if not response.data:
+            break
 
-    combined = pd.concat(all_data, ignore_index=True)
-    return combined
+        all_pitches.extend(response.data)
+        page += 1
 
-def fetch_batter_stats():
-    df = statcast("2022-04-07", "2022-10-05")
+        if page % 100 == 0:
+            print(f"Fetched {len(all_pitches)} pitches so far...")
 
-    batter_stats = df.groupby("batter").apply(lambda x: pd.Series({
-        "k_rate": (x["events"] == "strikeout").sum() / max(x["events"].notna().sum(), 1),
-        "bb_rate": (x["events"] == "walk").sum() / max(x["events"].notna().sum(), 1),
-    })).reset_index()
-
-    batter_stats.to_csv("data/batter_stats.csv", index=False)
-
+    df = pd.DataFrame(all_pitches)
+    print(f"Total pitches fetched: {len(df)}")
+    return df
 
 if __name__ == "__main__":
-    df = fetch_all_pitchers()
-
-    out_path = os.path.join("data", "raw_pitches.csv")
-    df.to_csv(out_path, index=False)
-
-    print(f"Data saved to {out_path}")
-    print(df["pitch_type"].value_counts())
-
-    fetch_batter_stats()
+    df = fetch_all_pitches()
+    df.to_csv("data/training_data.csv", index=False)
+    print("Saved to data/training_data.csv")
 
 

@@ -1,23 +1,16 @@
 import pandas as pd
 
-df = pd.read_csv("data/clean_full_pitches.csv")
-overall = pd.read_csv("data/pitcher_overall_tendencies.csv")
-hand = pd.read_csv("data/pitcher_hand_tendencies.csv")
-count = pd.read_csv("data/pitcher_count_tendencies.csv")
+def merge_tendencies(df, overall, hand, count):
+    merged = df.merge(overall, on="pitcher_name", how="left")
+    merged = merged.merge(hand, on=["pitcher_name", "stand"], how="left")
+    merged = merged.merge(count, on=["pitcher_name", "count"], how="left")
 
-df = df.merge(overall, on="pitcher_name", how="left")
+    tendency_cols = [c for c in merged.columns if "_pct" in c]
+    merged[tendency_cols] = merged[tendency_cols].fillna(0)
 
-df = df.merge(hand, on=["pitcher_name", "stand"], how="left")
+    return merged
 
-df = df.merge(count, on=["pitcher_name", "count"], how="left")
-
-tendency_cols = [c for c in df.columns if "_pct" in c]
-df[tendency_cols] = df[tendency_cols].fillna(0)
-
-print("Shape after merging tendencies:", df.shape)
-print("New tendency columns:", len(tendency_cols))
-print("\nSample tendency data:")
-print(df[["pitcher_name"] + tendency_cols[:5]].head())
-
-df.to_csv("data/clean_full_pitches_with_tendencies.csv", index=False)
-print("\nSaved to data/clean_full_pitches_with_tendencies.csv")
+if __name__ == "__main__":
+    raise SystemExit(
+        "This module now provides reusable functions. Import and call merge_tendency_features(df, overall, hand, count)."
+    )
