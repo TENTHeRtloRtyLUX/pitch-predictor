@@ -1,3 +1,4 @@
+import argparse
 import json
 from pathlib import Path
 
@@ -22,6 +23,15 @@ from training_data_pipeline import build_training_dataframe
 
 MODELS_DIR = Path("models")
 METRICS_DIR = Path("metrics")
+ALL_TABULAR_MODELS = [
+    "logistic_regression",
+    "sgd_classifier",
+    "random_forest",
+    "xgboost",
+    "lightgbm",
+    "catboost",
+    "calibrated_xgboost",
+]
 
 
 def ensure_output_dirs(models_dir=MODELS_DIR, metrics_dir=METRICS_DIR):
@@ -168,36 +178,90 @@ def to_dense_if_needed(X):
     return X
 
 
-def train_tabular_model_suite(
-    seasons=(2023, 2024, 2025),
+def get_trainer_map(X_train, y_train, sample_weights):
+    return {
+        "logistic_regression": lambda: train_logistic_regression(X_train, y_train),
+        "sgd_classifier": lambda: train_sgd_classifier(X_train, y_train),
+        "random_forest": lambda: train_random_forest(X_train, y_train),
+        "xgboost": lambda: train_xgboost(X_train, y_train, sample_weights),
+        "lightgbm": lambda: train_lightgbm(X_train, y_train),
+        "catboost": lambda: train_catboost(X_train, y_train),
+        "calibrated_xgboost": lambda: train_calibrated_xgboost(X_train, y_train, sample_weights),
+    }
+
+
+def load_or_build_training_dataframe(seasons, prepared_training_path=None):
+    if prepared_training_path:
+        return joblib.load(prepared_training_path)
+    return build_training_dataframe(seasons=list(seasons))
+
+
+def train_single_tabular_model(
+    model_name,
+    training_df,
     models_dir=MODELS_DIR,
     metrics_dir=METRICS_DIR,
 ):
     ensure_output_dirs(models_dir=models_dir, metrics_dir=metrics_dir)
+    X, y, label_encoder, preprocessor = prepare_tabular_features(training_df)
+    X_train, X_test, y_train, y_test = split_training_data(X, y)
+    sample_weights = compute_balanced_weights(y_train)
+    trainer_map = get_trainer_map(X_train, y_train, sample_weights)
 
-    training_df = build_training_dataframe(seasons=list(seasons))
+    if model_name not in trainer_map:
+        raise ValueError(f"Unsupported model_name: {model_name}")
+
+    print(f"\nTraining {model_name}...")
+    model = trainer_map[model_name]()
+    evaluation_X = to_dense_if_needed(X_test) if model_name in {"random_forest", "catboost"} else X_test
+    metrics = evaluate_model(model, evaluation_X, y_test, label_encoder)
+    print(f"{model_name} accuracy: {metrics['accuracy']:.4f}")
+
+    save_model_bundle(
+        model_name=model_name,
+        model=model,
+        metrics=metrics,
+        label_encoder=label_encoder,
+        feature_columns=preprocessor,
+        models_dir=models_dir,
+        metrics_dir=metrics_dir,
+    )
+    return {
+        "success": True,
+        "model_name": model_name,
+        "accuracy": metrics["accuracy"],
+        "training_rows": int(training_df.shape[0]),
+        "models_dir": str(models_dir.as_posix()),
+        "metrics_dir": str(metrics_dir.as_posix()),
+    }
+
+
+def train_tabular_model_suite(
+    seasons=(2023, 2024, 2025),
+    models_dir=MODELS_DIR,
+    metrics_dir=METRICS_DIR,
+    prepared_training_path=None,
+    model_names=None,
+):
+    ensure_output_dirs(models_dir=models_dir, metrics_dir=metrics_dir)
+
+    training_df = load_or_build_training_dataframe(seasons=seasons, prepared_training_path=prepared_training_path)
     X, y, label_encoder, preprocessor = prepare_tabular_features(training_df)
 
     X_train, X_test, y_train, y_test = split_training_data(X, y)
     sample_weights = compute_balanced_weights(y_train)
-
-    trainers = [
-        ("logistic_regression", lambda: train_logistic_regression(X_train, y_train)),
-        ("sgd_classifier", lambda: train_sgd_classifier(X_train, y_train)),
-        ("random_forest", lambda: train_random_forest(X_train, y_train)),
-        ("xgboost", lambda: train_xgboost(X_train, y_train, sample_weights)),
-        ("lightgbm", lambda: train_lightgbm(X_train, y_train)),
-        ("catboost", lambda: train_catboost(X_train, y_train)),
-        ("calibrated_xgboost", lambda: train_calibrated_xgboost(X_train, y_train, sample_weights)),
-    ]
+    trainer_map = get_trainer_map(X_train, y_train, sample_weights)
+    selected_model_names = list(model_names or ALL_TABULAR_MODELS)
 
     model_summaries = []
     best_model_name = None
     best_accuracy = float("-inf")
 
-    for model_name, trainer in trainers:
+    for model_name in selected_model_names:
         print(f"\nTraining {model_name}...")
-        model = trainer()
+        if model_name not in trainer_map:
+            raise ValueError(f"Unsupported model_name: {model_name}")
+        model = trainer_map[model_name]()
 
         evaluation_X = to_dense_if_needed(X_test) if model_name in {"random_forest", "catboost"} else X_test
         metrics = evaluate_model(model, evaluation_X, y_test, label_encoder)
@@ -230,7 +294,33 @@ def train_tabular_model_suite(
 
 
 def main():
-    summary = train_tabular_model_suite()
+    parser = argparse.ArgumentParser(description="Train tabular pitch-prediction models.")
+    parser.add_argument("--model-name", choices=ALL_TABULAR_MODELS, default=None)
+    parser.add_argument("--prepared-training-path", default=None)
+    parser.add_argument("--models-dir", default=str(MODELS_DIR))
+    parser.add_argument("--metrics-dir", default=str(METRICS_DIR))
+    parser.add_argument("--seasons", default="2023,2024,2025")
+    args = parser.parse_args()
+
+    seasons = tuple(int(part.strip()) for part in args.seasons.split(",") if part.strip())
+    models_dir = Path(args.models_dir)
+    metrics_dir = Path(args.metrics_dir)
+    training_df = load_or_build_training_dataframe(seasons=seasons, prepared_training_path=args.prepared_training_path)
+
+    if args.model_name:
+        summary = train_single_tabular_model(
+            model_name=args.model_name,
+            training_df=training_df,
+            models_dir=models_dir,
+            metrics_dir=metrics_dir,
+        )
+    else:
+        summary = train_tabular_model_suite(
+            seasons=seasons,
+            models_dir=models_dir,
+            metrics_dir=metrics_dir,
+            prepared_training_path=args.prepared_training_path,
+        )
     print(json.dumps(summary, indent=2))
 
 

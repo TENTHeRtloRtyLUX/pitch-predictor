@@ -39,6 +39,9 @@ TENDENCY_FILENAMES = {
     "hand": "pitcher_hand_tendencies.csv",
     "count": "pitcher_count_tendencies.csv",
 }
+TRAINING_DF_FILENAME = "training_dataframe.joblib"
+SEQUENCE_DATASET_FILENAME = "sequence_dataset.joblib"
+PREP_SUMMARY_FILENAME = "prep_summary.json"
 
 
 def _empty_series():
@@ -110,11 +113,15 @@ def build_training_dataframe(seasons, batch_size=1000):
 
 def refresh_tendency_files(seasons, output_dir="data", batch_size=1000):
     training_df = build_training_dataframe(seasons=seasons, batch_size=batch_size)
+    return save_tendency_files_from_training_dataframe(training_df, output_dir=output_dir)
+
+
+def save_tendency_files_from_training_dataframe(training_df, output_dir="data"):
     if training_df.empty:
         raise ValueError("Cannot build tendency files because the training dataframe is empty.")
 
     output_path = Path(output_dir)
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     overall_tendencies = training_df[
         ["pitcher_name"] + [col for col in training_df.columns if col.startswith("pitcher_pct_")]
@@ -295,8 +302,9 @@ def build_sequence_training_dataset(
     max_sequence_length=DEFAULT_SEQUENCE_LENGTH,
     test_size=0.2,
     random_state=42,
+    training_df=None,
 ):
-    training_df = build_training_dataframe(seasons=seasons, batch_size=batch_size)
+    training_df = training_df if training_df is not None else build_training_dataframe(seasons=seasons, batch_size=batch_size)
     if training_df.empty:
         raise ValueError("Training dataframe is empty; cannot build sequence dataset.")
 
@@ -320,6 +328,28 @@ def build_sequence_training_dataset(
         "train_game_ids": sorted(train_games),
         "test_game_ids": sorted(test_games),
     }
+
+
+def save_training_dataframe(training_df, output_path):
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(training_df, output_path)
+    return output_path
+
+
+def load_training_dataframe(input_path):
+    return joblib.load(input_path)
+
+
+def save_sequence_training_dataset(dataset, output_path):
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(dataset, output_path)
+    return output_path
+
+
+def load_sequence_training_dataset(input_path):
+    return joblib.load(input_path)
 
 
 def save_sequence_preprocessor(preprocessor, output_path):
@@ -367,6 +397,49 @@ def build_sequence_inference_inputs(history_df, current_feature_df, preprocessor
         "sequence_numeric": numeric_array,
         "static_features": static_features.astype("float32"),
     }
+
+
+def prepare_retraining_artifacts(
+    seasons,
+    output_dir,
+    batch_size=1000,
+    max_sequence_length=DEFAULT_SEQUENCE_LENGTH,
+    test_size=0.2,
+    random_state=42,
+):
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    training_df = build_training_dataframe(seasons=seasons, batch_size=batch_size)
+    if training_df.empty:
+        raise ValueError("Training dataframe is empty; cannot prepare retraining artifacts.")
+
+    tendency_summary = save_tendency_files_from_training_dataframe(training_df, output_dir=output_path / "data")
+    training_df_path = save_training_dataframe(training_df, output_path / TRAINING_DF_FILENAME)
+    sequence_dataset = build_sequence_training_dataset(
+        seasons=seasons,
+        batch_size=batch_size,
+        max_sequence_length=max_sequence_length,
+        test_size=test_size,
+        random_state=random_state,
+        training_df=training_df,
+    )
+    sequence_dataset_path = save_sequence_training_dataset(sequence_dataset, output_path / SEQUENCE_DATASET_FILENAME)
+
+    summary = {
+        "success": True,
+        "seasons": list(seasons),
+        "training_rows": int(len(training_df)),
+        "training_dataframe_path": str(training_df_path.as_posix()),
+        "sequence_dataset_path": str(sequence_dataset_path.as_posix()),
+        "tendency_files": tendency_summary["files"],
+        "train_examples": int(len(sequence_dataset["train_examples"]["targets"])),
+        "test_examples": int(len(sequence_dataset["test_examples"]["targets"])),
+    }
+    with open(output_path / PREP_SUMMARY_FILENAME, "w", encoding="utf-8") as file_obj:
+        json.dump(summary, file_obj, indent=2)
+
+    return summary
 
 
 if __name__ == "__main__":

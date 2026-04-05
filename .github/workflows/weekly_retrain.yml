@@ -11,6 +11,10 @@ on:
         description: Maximum allowed best-accuracy regression before upload is blocked
         required: true
         default: "0.02"
+      seasons:
+        description: Comma-separated seasons to train on
+        required: true
+        default: "2023,2024,2025"
   schedule:
     - cron: "0 9 * * 1"
 
@@ -18,15 +22,18 @@ concurrency:
   group: pitch-predictor-weekly-retrain
   cancel-in-progress: false
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
-  retrain:
+  prep:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 120
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      ACCURACY_DROP_THRESHOLD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.accuracy_drop_threshold || '0.02' }}
+      RETRAIN_SEASONS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.seasons || '2023,2024,2025' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,12 +48,189 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run weekly retrain
+      - name: Incremental ingest
+        run: python src/load_to_supabase.py
+
+      - name: Build shared retraining artifacts
+        run: python src/prepare_retraining_artifacts.py --seasons "$RETRAIN_SEASONS" --output-dir output/retrain_shared
+
+      - name: Upload prep artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrain-prep
+          path: |
+            output/retrain_shared/**
+            output/pitch_ingest_latest_summary.json
+          if-no-files-found: error
+
+  train_tabular:
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        model_name:
+          - logistic_regression
+          - sgd_classifier
+          - random_forest
+          - xgboost
+          - lightgbm
+          - catboost
+          - calibrated_xgboost
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.upload_enabled }}" = "true" ]; then
-            python src/run_weekly_retrain.py --accuracy-drop-threshold "$ACCURACY_DROP_THRESHOLD"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download prep artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: retrain-prep
+          path: output/retrain_shared
+
+      - name: Train tabular model
+        run: |
+          python src/train_tabular_models.py \
+            --model-name "${{ matrix.model_name }}" \
+            --prepared-training-path output/retrain_shared/training_dataframe.joblib \
+            --models-dir output/model_artifacts/models \
+            --metrics-dir output/model_artifacts/metrics
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tabular-${{ matrix.model_name }}
+          path: |
+            output/model_artifacts/models/**
+            output/model_artifacts/metrics/**
+          if-no-files-found: error
+
+  train_sequence:
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        model_type:
+          - lstm
+          - transformer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download prep artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: retrain-prep
+          path: output/retrain_shared
+
+      - name: Train sequence model
+        run: |
+          python src/train_sequence_models.py \
+            --model-type "${{ matrix.model_type }}" \
+            --prepared-sequence-path output/retrain_shared/sequence_dataset.joblib \
+            --models-dir output/model_artifacts/models \
+            --metrics-dir output/model_artifacts/metrics
+
+      - name: Upload sequence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sequence-${{ matrix.model_type }}
+          path: |
+            output/model_artifacts/models/**
+            output/model_artifacts/metrics/**
+          if-no-files-found: error
+
+  assemble:
+    needs:
+      - prep
+      - train_tabular
+      - train_sequence
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      ACCURACY_DROP_THRESHOLD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.accuracy_drop_threshold || '0.02' }}
+      UPLOAD_ENABLED: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.upload_enabled || 'false' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download prep artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: retrain-prep
+          path: output/retrain_shared
+
+      - name: Download all model artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "tabular-*"
+          path: output/downloaded_artifacts/tabular
+          merge-multiple: false
+
+      - name: Download all sequence artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "sequence-*"
+          path: output/downloaded_artifacts/sequence
+          merge-multiple: false
+
+      - name: Collect trained bundles
+        run: |
+          mkdir -p output/collected_models/models
+          mkdir -p output/collected_models/metrics
+          find output/downloaded_artifacts -type f -path "*/models/*" -exec cp {} output/collected_models/models/ \;
+          find output/downloaded_artifacts -type f -path "*/metrics/*" -exec cp {} output/collected_models/metrics/ \;
+
+      - name: Assemble registry and optionally upload
+        run: |
+          if [ "$UPLOAD_ENABLED" = "true" ]; then
+            python src/assemble_retrain_artifacts.py \
+              --prep-dir output/retrain_shared \
+              --trained-models-dir output/collected_models/models \
+              --trained-metrics-dir output/collected_models/metrics \
+              --accuracy-drop-threshold "$ACCURACY_DROP_THRESHOLD" \
+              --upload
           else
-            python src/run_weekly_retrain.py --no-upload --accuracy-drop-threshold "$ACCURACY_DROP_THRESHOLD"
+            python src/assemble_retrain_artifacts.py \
+              --prep-dir output/retrain_shared \
+              --trained-models-dir output/collected_models/models \
+              --trained-metrics-dir output/collected_models/metrics \
+              --accuracy-drop-threshold "$ACCURACY_DROP_THRESHOLD"
           fi
 
       - name: Upload run artifacts
@@ -55,8 +239,8 @@ jobs:
         with:
           name: weekly-retrain-artifacts
           path: |
-            output/weekly_retrain_summary.json
+            output/assemble_retrain_summary.json
             output/weekly_retrain_state.json
             output/pitch_ingest_latest_summary.json
-            output/*.log
+            output/retrain_shared/prep_summary.json
           if-no-files-found: warn

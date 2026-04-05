@@ -24,6 +24,7 @@ from tensorflow.keras.optimizers import Adam
 from model_artifacts import save_bundle_metadata
 from training_data_pipeline import (
     build_sequence_training_dataset,
+    load_sequence_training_dataset,
     save_sequence_preprocessor,
     save_sequence_split_manifest,
 )
@@ -189,11 +190,16 @@ def train_sequence_model(
     metrics_dir=METRICS_DIR,
     epochs=15,
     batch_size=64,
+    prepared_sequence_path=None,
 ):
     ensure_output_dirs(models_dir=models_dir, metrics_dir=metrics_dir)
-    dataset = build_sequence_training_dataset(
-        seasons=list(seasons),
-        max_sequence_length=max_sequence_length,
+    dataset = (
+        load_sequence_training_dataset(prepared_sequence_path)
+        if prepared_sequence_path
+        else build_sequence_training_dataset(
+            seasons=list(seasons),
+            max_sequence_length=max_sequence_length,
+        )
     )
     split_manifest_path = models_dir / f"{model_type}_sequence_split.json"
     save_sequence_split_manifest(dataset, split_manifest_path)
@@ -248,6 +254,9 @@ def main():
     parser.add_argument("--max-sequence-length", type=int, default=12)
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--prepared-sequence-path", default=None)
+    parser.add_argument("--models-dir", default=str(MODELS_DIR))
+    parser.add_argument("--metrics-dir", default=str(METRICS_DIR))
     args = parser.parse_args()
 
     summary = train_sequence_model(
@@ -255,6 +264,9 @@ def main():
         max_sequence_length=args.max_sequence_length,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        prepared_sequence_path=args.prepared_sequence_path,
+        models_dir=Path(args.models_dir),
+        metrics_dir=Path(args.metrics_dir),
     )
     print(json.dumps(summary, indent=2))
 
