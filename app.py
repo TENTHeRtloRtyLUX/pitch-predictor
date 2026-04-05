@@ -16,6 +16,7 @@ from mlb_api import PITCH_NAMES, get_games_on_date, get_live_game_state
 
 MODEL_REPO_ID = "rkhosla/pitch-predictor"
 LOCAL_REGISTRY_PATH = Path("models/model_registry.json")
+LOCAL_DATA_DIR = Path("data")
 
 supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
@@ -105,15 +106,18 @@ def load_registry_models():
 
 MODELS = load_registry_models()
 
-overall_tendencies = pd.read_csv(
-    hf_hub_download(repo_id=MODEL_REPO_ID, filename="pitcher_overall_tendencies.csv")
-)
-hand_tendencies = pd.read_csv(
-    hf_hub_download(repo_id=MODEL_REPO_ID, filename="pitcher_hand_tendencies.csv")
-)
-count_tendencies = pd.read_csv(
-    hf_hub_download(repo_id=MODEL_REPO_ID, filename="pitcher_count_tendencies.csv")
-)
+
+def load_tendency_table(filename):
+    local_path = LOCAL_DATA_DIR / filename
+    if local_path.exists():
+        return pd.read_csv(local_path)
+
+    return pd.read_csv(hf_hub_download(repo_id=MODEL_REPO_ID, filename=filename))
+
+
+overall_tendencies = load_tendency_table("pitcher_overall_tendencies.csv")
+hand_tendencies = load_tendency_table("pitcher_hand_tendencies.csv")
+count_tendencies = load_tendency_table("pitcher_count_tendencies.csv")
 
 
 @st.cache_resource
@@ -148,17 +152,27 @@ def load_pitcher_data():
 pitcher_list, pitcher_handedness = load_pitcher_data()
 
 
-def format_model_label(model_name):
-    accuracy = MODELS[model_name]["meta"].get("accuracy")
-    if accuracy is None:
-        return model_name
-
-    return f"{model_name} ({accuracy:.3f} acc)"
-
-
-MODEL_LABELS = {model_name: format_model_label(model_name) for model_name in MODELS}
+MODEL_LABELS = {model_name: model_name.replace("_", " ").title() for model_name in MODELS}
 MODEL_OPTIONS = list(MODELS.keys())
 DEFAULT_MODELS = MODEL_OPTIONS[: min(3, len(MODEL_OPTIONS))]
+
+
+def build_model_accuracy_table():
+    rows = []
+    for model_name, model_bundle in MODELS.items():
+        rows.append(
+            {
+                "Model": MODEL_LABELS[model_name],
+                "Accuracy": model_bundle["meta"].get("accuracy"),
+                "Description": model_bundle["meta"].get("description", ""),
+            }
+        )
+
+    leaderboard = pd.DataFrame(rows)
+    if leaderboard.empty:
+        return leaderboard
+
+    return leaderboard.sort_values("Accuracy", ascending=False, na_position="last").reset_index(drop=True)
 
 
 def normalize_prev_pitch(prev_pitch):
@@ -253,8 +267,6 @@ def predict_pitch(selected_models, **kwargs):
 def render_prediction_results(results):
     if len(results) == 1:
         model_name, result = next(iter(results.items()))
-        accuracy = MODELS[model_name]["meta"].get("accuracy")
-        accuracy_text = f" ({accuracy:.3f} acc)" if accuracy is not None else ""
         st.success(
             f"{MODEL_LABELS[model_name]}: **{PITCH_NAMES.get(result['pitch_code'], result['pitch_code'])}**"
         )
@@ -281,8 +293,19 @@ def render_prediction_results(results):
 
 
 st.title("MLB Pitch Predictor")
+if not MODELS:
+    st.error("No models are available. Build the model registry or upload model artifacts first.")
+    st.stop()
 
-available_model_names = list(MODELS.keys())
+st.caption("Most recent saved evaluation accuracy for each available model.")
+accuracy_table = build_model_accuracy_table()
+if not accuracy_table.empty:
+    st.dataframe(
+        accuracy_table,
+        use_container_width=True,
+        hide_index=True,
+        column_config={"Accuracy": st.column_config.NumberColumn(format="%.3f")},
+    )
 
 tab1, tab2 = st.tabs(["Live Games", "Manual Setup"])
 
@@ -293,11 +316,8 @@ with tab1:
         "Models to run",
         MODEL_OPTIONS,
         default=DEFAULT_MODELS,
-        format_func=lambda model_name: MODEL_LABELS[model_name],
         key="live_models",
     )
-
-    st.caption("Model accuracy shown is the most recent saved evaluation accuracy.")
 
     today = st.date_input("Game date", value=date.today()).strftime("%Y-%m-%d")
     games = get_games_on_date(today)
@@ -369,48 +389,46 @@ with tab2:
         "Models to run",
         MODEL_OPTIONS,
         default=DEFAULT_MODELS,
-        format_func=lambda model_name: MODEL_LABELS[model_name],
         key="manual_models",
     )
 
     if not pitcher_list:
         st.warning("No pitcher data available from Supabase.")
-        st.stop()
+    else:
+        pitcher = st.selectbox("Pitcher", pitcher_list)
+        p_throws = pitcher_handedness.get(pitcher, "R")
+        st.write(f"Pitcher throws: **{p_throws}**")
 
-    pitcher = st.selectbox("Pitcher", pitcher_list)
-    p_throws = pitcher_handedness.get(pitcher, "R")
-    st.write(f"Pitcher throws: **{p_throws}**")
+        stand = st.selectbox("Batter Stands", ["R", "L"])
+        balls = st.slider("Balls", 0, 3, 0)
+        strikes = st.slider("Strikes", 0, 2, 0)
+        outs = st.slider("Outs", 0, 2, 0)
+        inning = st.slider("Inning", 1, 9, 1)
+        on_1b = st.checkbox("Runner on 1st")
+        on_2b = st.checkbox("Runner on 2nd")
+        on_3b = st.checkbox("Runner on 3rd")
+        prev_pitch_options = {PITCH_NAMES.get(code, code): code for code in PITCH_NAMES}
+        prev_pitch_label = st.selectbox("Previous Pitch", list(prev_pitch_options.keys()))
+        prev_pitch = prev_pitch_options[prev_pitch_label]
+        score_diff = st.slider("Score Differential (your team)", -10, 10, 0)
 
-    stand = st.selectbox("Batter Stands", ["R", "L"])
-    balls = st.slider("Balls", 0, 3, 0)
-    strikes = st.slider("Strikes", 0, 2, 0)
-    outs = st.slider("Outs", 0, 2, 0)
-    inning = st.slider("Inning", 1, 9, 1)
-    on_1b = st.checkbox("Runner on 1st")
-    on_2b = st.checkbox("Runner on 2nd")
-    on_3b = st.checkbox("Runner on 3rd")
-    prev_pitch_options = {PITCH_NAMES.get(code, code): code for code in PITCH_NAMES}
-    prev_pitch_label = st.selectbox("Previous Pitch", list(prev_pitch_options.keys()))
-    prev_pitch = prev_pitch_options[prev_pitch_label]
-    score_diff = st.slider("Score Differential (your team)", -10, 10, 0)
-
-    if st.button("Predict Next Pitch"):
-        if not manual_selected_models:
-            st.info("Select at least one model to generate predictions.")
-        else:
-            results = predict_pitch(
-                manual_selected_models,
-                pitcher=pitcher,
-                p_throws=p_throws,
-                stand=stand,
-                balls=balls,
-                strikes=strikes,
-                outs=outs,
-                inning=inning,
-                on_1b=int(on_1b),
-                on_2b=int(on_2b),
-                on_3b=int(on_3b),
-                prev_pitch=prev_pitch,
-                score_diff=score_diff,
-            )
-            render_prediction_results(results)
+        if st.button("Predict Next Pitch"):
+            if not manual_selected_models:
+                st.info("Select at least one model to generate predictions.")
+            else:
+                results = predict_pitch(
+                    manual_selected_models,
+                    pitcher=pitcher,
+                    p_throws=p_throws,
+                    stand=stand,
+                    balls=balls,
+                    strikes=strikes,
+                    outs=outs,
+                    inning=inning,
+                    on_1b=int(on_1b),
+                    on_2b=int(on_2b),
+                    on_3b=int(on_3b),
+                    prev_pitch=prev_pitch,
+                    score_diff=score_diff,
+                )
+                render_prediction_results(results)

@@ -4,6 +4,7 @@ import os
 import time
 
 BASE_URL = "https://statsapi.mlb.com/api/v1"
+REQUEST_TIMEOUT = 20
 
 PITCH_NAMES = {
     "FF": "4-Seam Fastball",
@@ -20,11 +21,16 @@ PITCH_NAMES = {
     "FO": "Forkball",
 }
 
+
+def fetch_json(url):
+    response = requests.get(url, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
+    return response.json()
+
 def get_games_on_date(date):
     """Get all game IDs for a given date (format: YYYY-MM-DD)"""
     url = f"{BASE_URL}/schedule?sportId=1&date={date}"
-    response = requests.get(url)
-    data = response.json()
+    data = fetch_json(url)
 
     games = []
     for date_entry in data.get("dates", []):
@@ -42,8 +48,7 @@ def get_games_on_date(date):
 def get_pitches_from_game(game_id):
     """Get all pitches from a game with score differential"""
     url = f"https://statsapi.mlb.com/api/v1.1/game/{game_id}/feed/live"
-    response = requests.get(url)
-    data = response.json()
+    data = fetch_json(url)
 
     pitches = []
     all_plays = data.get("liveData", {}).get("plays", {}).get("allPlays", [])
@@ -94,8 +99,7 @@ def get_pitches_from_game(game_id):
 def get_live_game_state(game_id):
     """Get current state of a live or recent game"""
     url = f"https://statsapi.mlb.com/api/v1.1/game/{game_id}/feed/live"
-    response = requests.get(url)
-    data = response.json()
+    data = fetch_json(url)
 
     live_data = data.get("liveData", {})
     plays = live_data.get("plays", {})
@@ -155,8 +159,7 @@ def get_live_game_state(game_id):
 def get_all_games_for_season(year):
     """Get all game IDs for a full season"""
     url = f"{BASE_URL}/schedule?sportId=1&season={year}&gameType=R"
-    response = requests.get(url)
-    data = response.json()
+    data = fetch_json(url)
 
     game_ids = []
     for date_entry in data.get("dates", []):

@@ -4,25 +4,26 @@ A Streamlit app that predicts what pitch an MLB pitcher will throw next based on
 
 Live app: [pitch-predictor.streamlit.app](https://pitch-predictor.streamlit.app)
 
-## Current Direction
+## Overview
 
-The project is moving from a local CSV-based workflow to a Supabase-backed training pipeline:
+The app now supports multiple trained models side by side. At the top of the app, a model leaderboard shows the saved evaluation accuracy for every model currently available in the registry. Users can then select any subset of those models and compare their predictions in both live-game and manual modes.
+
+The project has also moved away from a local CSV-first workflow and toward a Supabase-backed training pipeline:
 
 - MLB Stats API is the source for historical and live pitch data
 - Supabase stores the compact retained pitch-level training dataset
-- in-memory preparation steps build tendency features without depending on saved local CSVs
-- multiple tabular models can be trained from the same prepared dataset
-
-This keeps the runtime app lightweight while making retraining and model comparison easier to manage.
+- feature preparation and tendency generation now run in memory
+- the app can load either local model bundles or uploaded Hugging Face artifacts
 
 ## Features
 
 - Live game mode for current MLB matchups
 - Manual setup mode for custom situations
+- Multi-model pitch prediction comparison
+- Model accuracy leaderboard shown directly in the app
 - Pitch-type probability outputs, not just a single class prediction
 - Pitcher tendency features by overall usage, batter handedness, and count
 - Supabase-backed historical pitch data for centralized retraining
-- Shared multi-model training pipeline for side-by-side comparison
 
 ## Tech Stack
 
@@ -37,8 +38,8 @@ This keeps the runtime app lightweight while making retraining and model compari
 ### Active Runtime
 | File | Description |
 |------|-------------|
-| `app.py` | Main Streamlit application |
-| `src/mlb_api.py` | Fetches schedules, live game state, and historical game pitch logs from the MLB Stats API |
+| `app.py` | Main Streamlit application with live and manual prediction flows |
+| `src/mlb_api.py` | Fetches schedules, live game state, and historical pitch logs from the MLB Stats API |
 
 ### Active Data Pipeline
 | File | Description |
@@ -55,8 +56,8 @@ This keeps the runtime app lightweight while making retraining and model compari
 |------|-------------|
 | `src/tabular_training.py` | Shared tabular feature preparation and train/test helpers |
 | `src/train_tabular_models.py` | Trains the active tabular model suite |
-| `src/build_model_registry.py` | Builds a registry of available trained models and metrics |
-| `src/upload_models.py` | Uploads selected model artifacts to Hugging Face |
+| `src/build_model_registry.py` | Builds a registry of trained models and saved metrics |
+| `src/upload_models.py` | Uploads model bundles, metrics, tendencies, and registry files to Hugging Face |
 
 ### Legacy
 
@@ -92,29 +93,35 @@ The retained `pitches` dataset is intentionally compact. The active training pip
 1. Create a virtual environment: `python -m venv venv`
 2. Activate it: `venv\Scripts\activate` on Windows or `source venv/bin/activate` on macOS/Linux
 3. Install dependencies: `pip install -r requirements.txt`
-4. Create a `.env` file with your Supabase credentials and any model-hosting tokens you need
-5. Run the app: `streamlit run app.py`
+4. Create a `.env` file for training scripts with:
+   - `SUPABASE_URL`
+   - `SUPABASE_KEY`
+   - `HF_TOKEN` when you want to upload artifacts
+5. Create `.streamlit/secrets.toml` for the Streamlit app with:
+   - `SUPABASE_URL`
+   - `SUPABASE_KEY`
+6. Run the app locally: `streamlit run app.py`
 
 ## Training Workflow
 
 The current retraining flow is:
 
 1. Update Supabase from the MLB Stats API with `python src/load_to_supabase.py`
-2. Build the shared training dataset in memory from retained seasons
-3. Train the tabular models with `python src/train_tabular_models.py`
-4. Build the model registry with `python src/build_model_registry.py`
-5. Upload selected artifacts with `python src/upload_models.py`
+2. Train the tabular models with `python src/train_tabular_models.py`
+3. Rebuild the registry with `python src/build_model_registry.py`
+4. Upload selected artifacts with `python src/upload_models.py`
 
-The intended cadence is:
+The app will prefer:
 
-- ingest new pitches regularly
-- refresh tendency features on each retrain
-- retrain the heavier models on a schedule rather than after every update
-- reserve more frequent updates for lighter online-friendly baselines
+- local `models/model_registry.json` and local model bundles when present
+- otherwise a remote `model_registry.json` from Hugging Face
+- otherwise a single fallback XGBoost v2 model
+
+For tendency tables, the app prefers local `data/*.csv` files when available and falls back to Hugging Face otherwise.
 
 ## Active Models
 
-The active tabular training pipeline is set up for:
+The active tabular training pipeline supports:
 
 - Logistic Regression
 - SGDClassifier
@@ -124,7 +131,13 @@ The active tabular training pipeline is set up for:
 - CatBoost
 - Calibrated XGBoost
 
-Sequence models like LSTM and transformers are planned next once the shared data pipeline and model comparison flow are in place.
+Any trained model with a complete bundle and saved metrics can appear in the app and in the model leaderboard.
+
+## Notes
+
+- Accuracy shown in the app is the most recent saved evaluation accuracy from the latest training run.
+- Local and deployed apps can show different model sets if the local registry and the remote Hugging Face registry are out of sync.
+- Sequence models like LSTM and transformers are planned next once the shared data pipeline and comparison flow are stable.
 
 ## Roadmap
 
@@ -132,7 +145,7 @@ Sequence models like LSTM and transformers are planned next once the shared data
 - [x] Supabase-backed runtime data
 - [x] Shared in-memory tabular training pipeline
 - [x] Multi-model tabular training support
-- [ ] Model comparison UI in Streamlit
+- [x] Model comparison UI in Streamlit
 - [ ] Scheduled retraining and tendency refresh workflow
 - [ ] Sequence modeling with LSTM
 - [ ] Transformer-based pitch sequence modeling

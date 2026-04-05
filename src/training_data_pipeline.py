@@ -6,7 +6,7 @@ from merge_tendencies import merge_tendency_features
 from supabase_data_loader import load_pitches_from_supabase
 
 
-def build_training_dataframe(seasons, batch_size=5000):
+def build_training_dataframe(seasons, batch_size=1000):
     raw_df = load_pitches_from_supabase(seasons=seasons, batch_size=batch_size)
 
     if raw_df.empty:
