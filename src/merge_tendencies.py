@@ -1,6 +1,7 @@
 import pandas as pd
 
-def merge_tendencies(df, overall, hand, count):
+
+def merge_tendency_features(df, overall, hand, count):
     merged = df.merge(overall, on="pitcher_name", how="left")
     merged = merged.merge(hand, on=["pitcher_name", "stand"], how="left")
     merged = merged.merge(count, on=["pitcher_name", "count"], how="left")
@@ -9,6 +10,10 @@ def merge_tendencies(df, overall, hand, count):
     merged[tendency_cols] = merged[tendency_cols].fillna(0)
 
     return merged
+
+
+def merge_tendencies(df, overall, hand, count):
+    return merge_tendency_features(df, overall, hand, count)
 
 if __name__ == "__main__":
     raise SystemExit(

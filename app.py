@@ -1,66 +1,151 @@
-import streamlit as st
-import pandas as pd
-import joblib
+import json
 import sys
 import time
 from datetime import date
+from pathlib import Path
+
+import joblib
+import pandas as pd
+import streamlit as st
 from huggingface_hub import hf_hub_download
 from supabase import create_client
 
 sys.path.append("src")
-from mlb_api import get_games_on_date, get_live_game_state, PITCH_NAMES
+from mlb_api import PITCH_NAMES, get_games_on_date, get_live_game_state
+
+
+MODEL_REPO_ID = "rkhosla/pitch-predictor"
+LOCAL_REGISTRY_PATH = Path("models/model_registry.json")
 
 supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
+
 @st.cache_resource
-def load_models():
-    model_path = hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="full_xgb_v2_model.pkl")
-    encoder_path = hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="full_v2_label_encoder.pkl")
-    features_path = hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="full_v2_feature_columns.pkl")
-    
+def load_model_registry():
+    if LOCAL_REGISTRY_PATH.exists():
+        with open(LOCAL_REGISTRY_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    return [
+        {
+            "name": "xgboost_v2",
+            "description": "Fallback deployed XGBoost model.",
+            "source": "huggingface",
+            "model_filename": "full_xgb_v2_model.pkl",
+            "label_encoder_filename": "full_v2_label_encoder.pkl",
+            "feature_columns_filename": "full_v2_feature_columns.pkl",
+            "active": True,
+        }
+    ]
+
+
+@st.cache_resource
+def load_model_artifacts(model_name, model_path, label_encoder_path, feature_columns_path):
     model = joblib.load(model_path)
-    le_pitch = joblib.load(encoder_path)
-    feature_columns = joblib.load(features_path)
-    
-    return model, le_pitch, feature_columns
+    label_encoder = joblib.load(label_encoder_path)
+    feature_columns = joblib.load(feature_columns_path)
+    return model, label_encoder, feature_columns
 
-model, le_pitch, feature_columns = load_models()
 
-overall_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="pitcher_overall_tendencies.csv"))
-hand_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="pitcher_hand_tendencies.csv"))
-count_tendencies = pd.read_csv(hf_hub_download(repo_id="rkhosla/pitch-predictor", filename="pitcher_count_tendencies.csv"))
+@st.cache_resource
+def load_registry_models():
+    registry = [entry for entry in load_model_registry() if entry.get("active", True)]
+    loaded_models = {}
+
+    for entry in registry:
+        if entry.get("source") == "huggingface":
+            model_path = hf_hub_download(repo_id=MODEL_REPO_ID, filename=entry["model_filename"])
+            label_encoder_path = hf_hub_download(repo_id=MODEL_REPO_ID, filename=entry["label_encoder_filename"])
+            feature_columns_path = hf_hub_download(repo_id=MODEL_REPO_ID, filename=entry["feature_columns_filename"])
+        else:
+            model_path = entry["model_path"]
+            label_encoder_path = entry["label_encoder_path"]
+            feature_columns_path = entry["feature_columns_path"]
+
+        model, label_encoder, feature_columns = load_model_artifacts(
+            entry["name"],
+            model_path,
+            label_encoder_path,
+            feature_columns_path,
+        )
+
+        loaded_models[entry["name"]] = {
+            "meta": entry,
+            "model": model,
+            "label_encoder": label_encoder,
+            "feature_columns": feature_columns,
+        }
+
+    return loaded_models
+
+
+MODELS = load_registry_models()
+
+overall_tendencies = pd.read_csv(
+    hf_hub_download(repo_id=MODEL_REPO_ID, filename="pitcher_overall_tendencies.csv")
+)
+hand_tendencies = pd.read_csv(
+    hf_hub_download(repo_id=MODEL_REPO_ID, filename="pitcher_hand_tendencies.csv")
+)
+count_tendencies = pd.read_csv(
+    hf_hub_download(repo_id=MODEL_REPO_ID, filename="pitcher_count_tendencies.csv")
+)
+
 
 @st.cache_resource
 def load_pitcher_data():
     all_pitchers = []
     page = 0
     page_size = 1000
-    
+
     while True:
         response = supabase.table("pitchers").select("name, throws").range(
             page * page_size, (page + 1) * page_size - 1
         ).execute()
-        
+
         if not response.data:
             break
-            
+
         all_pitchers.extend(response.data)
         page += 1
-    
+
     pitcher_df = pd.DataFrame(all_pitchers)
     pitcher_list = sorted(pitcher_df["name"].tolist())
     pitcher_handedness = dict(zip(pitcher_df["name"], pitcher_df["throws"]))
     return pitcher_list, pitcher_handedness
 
+
 pitcher_list, pitcher_handedness = load_pitcher_data()
 
-def predict_pitch(pitcher, p_throws, stand, balls, strikes, outs, inning, on_1b, on_2b, on_3b, prev_pitch, score_diff=0):
+
+def normalize_prev_pitch(prev_pitch):
+    if prev_pitch in PITCH_NAMES:
+        return prev_pitch
+
+    reverse_names = {name: code for code, name in PITCH_NAMES.items()}
+    return reverse_names.get(prev_pitch, "FF")
+
+
+def build_prediction_features(
+    pitcher,
+    p_throws,
+    stand,
+    balls,
+    strikes,
+    outs,
+    inning,
+    on_1b,
+    on_2b,
+    on_3b,
+    prev_pitch,
+    score_diff,
+):
     count = f"{balls}-{strikes}"
-    
+
     input_dict = {
         "balls": balls,
         "strikes": strikes,
-        "outs_when_up": outs,
+        "outs": outs,
         "inning": inning,
         "on_1b": on_1b,
         "on_2b": on_2b,
@@ -68,61 +153,122 @@ def predict_pitch(pitcher, p_throws, stand, balls, strikes, outs, inning, on_1b,
         "p_throws": p_throws,
         "stand": stand,
         "pitcher_name": pitcher,
-        "prev_pitch": prev_pitch,
+        "prev_pitch": normalize_prev_pitch(prev_pitch),
         "count": count,
         "score_diff": score_diff,
     }
-    
+
     input_df = pd.DataFrame([input_dict])
-    
-    # Merge tendency features
     input_df = input_df.merge(overall_tendencies, on="pitcher_name", how="left")
     input_df = input_df.merge(hand_tendencies, on=["pitcher_name", "stand"], how="left")
     input_df = input_df.merge(count_tendencies, on=["pitcher_name", "count"], how="left")
-    
-    # Fill missing tendencies with 0
+
     tendency_cols = [c for c in input_df.columns if "_pct" in c]
     input_df[tendency_cols] = input_df[tendency_cols].fillna(0)
-    
-    # One-hot encode
-    input_df = pd.get_dummies(input_df)
+    return input_df
+
+
+def predict_with_model(model_name, features_df):
+    model_bundle = MODELS[model_name]
+    model = model_bundle["model"]
+    label_encoder = model_bundle["label_encoder"]
+    feature_columns = model_bundle["feature_columns"]
+
+    input_df = pd.get_dummies(features_df)
     input_df = input_df.reindex(columns=feature_columns, fill_value=0)
-    
+
     pred = model.predict(input_df)[0]
-    proba = model.predict_proba(input_df)[0]
-    pitch_name = le_pitch.inverse_transform([pred])[0]
-    
-    proba_df = pd.DataFrame({
-        "Pitch Type": [PITCH_NAMES.get(c, c) for c in le_pitch.classes_],
-        "Probability": [round(p * 100, 1) for p in proba]
-    }).sort_values("Probability", ascending=False)
-    
-    return pitch_name, proba_df
+    pitch_code = label_encoder.inverse_transform([pred])[0]
 
-st.title("⚾ MLB Pitch Predictor")
+    proba_df = None
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba(input_df)[0]
+        proba_df = pd.DataFrame(
+            {
+                "Pitch Type": [PITCH_NAMES.get(c, c) for c in label_encoder.classes_],
+                "Probability": [round(p * 100, 1) for p in proba],
+            }
+        ).sort_values("Probability", ascending=False)
 
-tab1, tab2 = st.tabs(["🔴 Live Games", "🎮 Manual Setup"])
+    return pitch_code, proba_df
+
+
+def predict_pitch(selected_models, **kwargs):
+    features_df = build_prediction_features(**kwargs)
+    results = {}
+
+    for model_name in selected_models:
+        pitch_code, proba_df = predict_with_model(model_name, features_df)
+        results[model_name] = {
+            "pitch_code": pitch_code,
+            "probabilities": proba_df,
+        }
+
+    return results
+
+
+def render_prediction_results(results):
+    if len(results) == 1:
+        model_name, result = next(iter(results.items()))
+        st.success(
+            f"{model_name}: **{PITCH_NAMES.get(result['pitch_code'], result['pitch_code'])}**"
+        )
+        if result["probabilities"] is not None:
+            st.dataframe(result["probabilities"], use_container_width=True)
+        return
+
+    summary_rows = []
+    for model_name, result in results.items():
+        summary_rows.append(
+            {
+                "Model": model_name,
+                "Predicted Pitch": PITCH_NAMES.get(result["pitch_code"], result["pitch_code"]),
+            }
+        )
+
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True)
+
+    for model_name, result in results.items():
+        if result["probabilities"] is not None:
+            st.subheader(f"{model_name} probabilities")
+            st.dataframe(result["probabilities"], use_container_width=True)
+
+
+st.title("MLB Pitch Predictor")
+
+available_model_names = list(MODELS.keys())
+default_models = available_model_names[:1]
+
+tab1, tab2 = st.tabs(["Live Games", "Manual Setup"])
 
 with tab1:
     st.header("Live Game Predictions")
-    
-    today = st.date_input("Game date", value=date.today()).strftime('%Y-%m-%d')
+
+    live_selected_models = st.multiselect(
+        "Models to run",
+        available_model_names,
+        default=default_models,
+        key="live_models",
+    )
+
+    today = st.date_input("Game date", value=date.today()).strftime("%Y-%m-%d")
     games = get_games_on_date(today)
-    
+
     if not games:
         st.warning("No games found today.")
+    elif not live_selected_models:
+        st.info("Select at least one model to generate predictions.")
     else:
         game_labels = [f"{g['away_team']} @ {g['home_team']} ({g['status']})" for g in games]
         selected_game = st.selectbox("Select a game", game_labels)
         game_idx = game_labels.index(selected_game)
         game_id = games[game_idx]["game_id"]
-        game_status = games[game_idx]["status"]
-        
+
         auto_refresh = st.toggle("Auto-refresh every 10 seconds", value=False)
-        
+
         if st.button("Load Game") or auto_refresh:
             state = get_live_game_state(game_id)
-            
+
             if not state:
                 st.warning("No live data available for this game yet.")
             else:
@@ -130,7 +276,7 @@ with tab1:
                 col1.metric("Pitcher", state["pitcher"])
                 col2.metric("Batter", state["batter"])
                 col3.metric("Inning", f"{'Top' if state['inning_half'] == 'top' else 'Bot'} {state['inning']}")
-                
+
                 col4, col5, col6 = st.columns(3)
                 col4.metric("Count", f"{state['balls']}-{state['strikes']}")
                 col5.metric("Outs", state["outs"])
@@ -140,42 +286,48 @@ with tab1:
                 col7.metric("Home Score", state["home_score"])
                 col8.metric("Away Score", state["away_score"])
                 col9.metric("Score Diff", f"{'+' if state['score_diff'] > 0 else ''}{state['score_diff']}")
-                
+
                 if state["recent_pitches"]:
                     st.subheader("Current At-Bat")
                     recent_df = pd.DataFrame(state["recent_pitches"])
                     st.dataframe(recent_df, use_container_width=True)
-                
+
                 st.subheader("Next Pitch Prediction")
-                pitch_name, proba_df = predict_pitch(
-                    state["pitcher"],
-                    state["p_throws"],
-                    state["stand"],
-                    state["balls"],
-                    state["strikes"],
-                    state["outs"],
-                    state["inning"],
-                    state["on_1b"],
-                    state["on_2b"],
-                    state["on_3b"],
-                    state["prev_pitch"],
-                    state["score_diff"]
+                results = predict_pitch(
+                    live_selected_models,
+                    pitcher=state["pitcher"],
+                    p_throws=state["p_throws"],
+                    stand=state["stand"],
+                    balls=state["balls"],
+                    strikes=state["strikes"],
+                    outs=state["outs"],
+                    inning=state["inning"],
+                    on_1b=state["on_1b"],
+                    on_2b=state["on_2b"],
+                    on_3b=state["on_3b"],
+                    prev_pitch=state["prev_pitch"],
+                    score_diff=state["score_diff"],
                 )
-                
-                st.success(f"Predicted Next Pitch: **{PITCH_NAMES.get(pitch_name, pitch_name)}**")
-                st.dataframe(proba_df, use_container_width=True)
-                
+                render_prediction_results(results)
+
                 if auto_refresh:
                     time.sleep(10)
                     st.rerun()
 
 with tab2:
     st.header("Manual Situation Setup")
-    
+
+    manual_selected_models = st.multiselect(
+        "Models to run",
+        available_model_names,
+        default=default_models,
+        key="manual_models",
+    )
+
     pitcher = st.selectbox("Pitcher", pitcher_list)
     p_throws = pitcher_handedness.get(pitcher, "R")
     st.write(f"Pitcher throws: **{p_throws}**")
-    
+
     stand = st.selectbox("Batter Stands", ["R", "L"])
     balls = st.slider("Balls", 0, 3, 0)
     strikes = st.slider("Strikes", 0, 2, 0)
@@ -184,15 +336,28 @@ with tab2:
     on_1b = st.checkbox("Runner on 1st")
     on_2b = st.checkbox("Runner on 2nd")
     on_3b = st.checkbox("Runner on 3rd")
-    prev_pitch_options = {v: k for k, v in PITCH_NAMES.items()}
+    prev_pitch_options = {PITCH_NAMES.get(code, code): code for code in PITCH_NAMES}
     prev_pitch_label = st.selectbox("Previous Pitch", list(prev_pitch_options.keys()))
     prev_pitch = prev_pitch_options[prev_pitch_label]
     score_diff = st.slider("Score Differential (your team)", -10, 10, 0)
-    
+
     if st.button("Predict Next Pitch"):
-        pitch_name, proba_df = predict_pitch(
-            pitcher, p_throws, stand, balls, strikes,
-            outs, inning, int(on_1b), int(on_2b), int(on_3b), prev_pitch
-        )
-        st.success(f"Predicted Next Pitch: **{PITCH_NAMES.get(pitch_name, pitch_name)}**")
-        st.dataframe(proba_df, use_container_width=True)
+        if not manual_selected_models:
+            st.info("Select at least one model to generate predictions.")
+        else:
+            results = predict_pitch(
+                manual_selected_models,
+                pitcher=pitcher,
+                p_throws=p_throws,
+                stand=stand,
+                balls=balls,
+                strikes=strikes,
+                outs=outs,
+                inning=inning,
+                on_1b=int(on_1b),
+                on_2b=int(on_2b),
+                on_3b=int(on_3b),
+                prev_pitch=prev_pitch,
+                score_diff=score_diff,
+            )
+            render_prediction_results(results)
