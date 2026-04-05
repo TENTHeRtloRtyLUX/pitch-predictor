@@ -26,6 +26,7 @@ def prepare_tabular_features(df):
 def split_training_data(X, y, test_size=0.2, random_state=42):
     return train_test_split(X, y, test_size=test_size, random_state=random_state)
 
-def compute_weights(y_train):
+def compute_balanced_weights(y_train):
     return compute_sample_weight(class_weight="balanced", y=y_train)
+
 

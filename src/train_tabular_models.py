@@ -47,9 +47,10 @@ def save_model_bundle(model_name, model, metrics, label_encoder, feature_columns
 
 
 def train_logistic_regression(X_train, y_train):
-    model = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=42)
+    model = LogisticRegression(max_iter=3000, solver="saga", class_weight="balanced", random_state=42,)
     model.fit(X_train, y_train)
     return model
+
 
 def train_sgd_classifier(X_train, y_train):
     model = SGDClassifier(loss="log_loss", max_iter=1000, class_weight="balanced", random_state=42, tol=1e-3)

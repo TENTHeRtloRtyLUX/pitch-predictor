@@ -5,6 +5,8 @@ from pathlib import Path
 MODELS_DIR = Path("models")
 METRICS_DIR = Path("metrics")
 REGISTRY_PATH = MODELS_DIR / "model_registry.json"
+MIN_ACTIVE_ACCURACY = 0.5
+INACTIVE_MODELS = {"sgd_classifier"}
 
 MODEL_DESCRIPTIONS = {
     "logistic_regression": "Balanced logistic regression baseline for tabular pitch prediction.",
@@ -26,7 +28,18 @@ def load_metrics(model_name):
         return json.load(f)
 
 
-def build_registry():
+def is_active_model(model_name, metrics):
+    if model_name in INACTIVE_MODELS:
+        return False
+
+    accuracy = metrics.get("accuracy") if metrics else None
+    if accuracy is None:
+        return False
+
+    return accuracy >= MIN_ACTIVE_ACCURACY
+
+
+def build_registry(source="local"):
     registry = []
 
     for model_path in sorted(MODELS_DIR.glob("*.pkl")):
@@ -41,24 +54,35 @@ def build_registry():
         if not label_encoder_path.exists() or not feature_columns_path.exists():
             continue
 
-        registry.append(
-            {
-                "name": model_name,
-                "description": MODEL_DESCRIPTIONS.get(model_name, ""),
-                "model_path": str(model_path.as_posix()),
-                "label_encoder_path": str(label_encoder_path.as_posix()),
-                "feature_columns_path": str(feature_columns_path.as_posix()),
-                "metrics_path": str((METRICS_DIR / f"{model_name}_metrics.json").as_posix()),
-                "accuracy": metrics.get("accuracy") if metrics else None,
-                "active": True,
-            }
-        )
+        entry = {
+            "name": model_name,
+            "description": MODEL_DESCRIPTIONS.get(model_name, ""),
+            "model_filename": model_path.name,
+            "label_encoder_filename": label_encoder_path.name,
+            "feature_columns_filename": feature_columns_path.name,
+            "metrics_filename": f"{model_name}_metrics.json",
+            "accuracy": metrics.get("accuracy") if metrics else None,
+            "active": is_active_model(model_name, metrics),
+            "source": source,
+        }
+
+        if source == "local":
+            entry.update(
+                {
+                    "model_path": str(model_path.as_posix()),
+                    "label_encoder_path": str(label_encoder_path.as_posix()),
+                    "feature_columns_path": str(feature_columns_path.as_posix()),
+                    "metrics_path": str((METRICS_DIR / f"{model_name}_metrics.json").as_posix()),
+                }
+            )
+
+        registry.append(entry)
 
     return registry
 
 
 def main():
-    registry = build_registry()
+    registry = build_registry(source="local")
 
     with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
         json.dump(registry, f, indent=2)

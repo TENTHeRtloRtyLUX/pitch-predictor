@@ -24,7 +24,31 @@ supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 def load_model_registry():
     if LOCAL_REGISTRY_PATH.exists():
         with open(LOCAL_REGISTRY_PATH, "r", encoding="utf-8") as f:
+            local_registry = json.load(f)
+
+        local_registry_is_usable = True
+        for entry in local_registry:
+            if entry.get("source") == "huggingface":
+                continue
+
+            required_paths = [
+                entry.get("model_path"),
+                entry.get("label_encoder_path"),
+                entry.get("feature_columns_path"),
+            ]
+            if not all(required_paths) or not all(Path(path).exists() for path in required_paths):
+                local_registry_is_usable = False
+                break
+
+        if local_registry_is_usable:
+            return local_registry
+
+    try:
+        registry_path = hf_hub_download(repo_id=MODEL_REPO_ID, filename="model_registry.json")
+        with open(registry_path, "r", encoding="utf-8") as f:
             return json.load(f)
+    except Exception:
+        pass
 
     return [
         {
@@ -109,7 +133,13 @@ def load_pitcher_data():
         all_pitchers.extend(response.data)
         page += 1
 
+    if not all_pitchers:
+        return [], {}
+
     pitcher_df = pd.DataFrame(all_pitchers)
+    if "name" not in pitcher_df.columns or "throws" not in pitcher_df.columns:
+        return [], {}
+
     pitcher_list = sorted(pitcher_df["name"].tolist())
     pitcher_handedness = dict(zip(pitcher_df["name"], pitcher_df["throws"]))
     return pitcher_list, pitcher_handedness
@@ -323,6 +353,10 @@ with tab2:
         default=default_models,
         key="manual_models",
     )
+
+    if not pitcher_list:
+        st.warning("No pitcher data available from Supabase.")
+        st.stop()
 
     pitcher = st.selectbox("Pitcher", pitcher_list)
     p_throws = pitcher_handedness.get(pitcher, "R")

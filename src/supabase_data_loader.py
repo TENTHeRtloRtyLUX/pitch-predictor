@@ -41,11 +41,7 @@ def get_supabase_client():
     return create_client(url, key)
 
 
-def load_pitches_for_season(
-    season: int,
-    columns=None,
-    batch_size: int = 5000,
-) -> pd.DataFrame:
+def load_pitches_for_season(season, columns=None, batch_size=1000):
     supabase = get_supabase_client()
     selected_columns = columns or DEFAULT_PITCH_COLUMNS
 
@@ -82,7 +78,7 @@ def load_pitches_for_season(
 def load_pitches_from_supabase(
     seasons: Optional[Iterable[int]] = None,
     columns=None,
-    batch_size: int = 5000,
+    batch_size: int = 1000,
 ) -> pd.DataFrame:
     seasons = list(seasons or [])
     if not seasons:
