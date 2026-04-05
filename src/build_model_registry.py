@@ -5,8 +5,6 @@ from pathlib import Path
 MODELS_DIR = Path("models")
 METRICS_DIR = Path("metrics")
 REGISTRY_PATH = MODELS_DIR / "model_registry.json"
-MIN_ACTIVE_ACCURACY = 0.5
-INACTIVE_MODELS = {"sgd_classifier"}
 
 MODEL_DESCRIPTIONS = {
     "logistic_regression": "Balanced logistic regression baseline for tabular pitch prediction.",
@@ -29,14 +27,7 @@ def load_metrics(model_name):
 
 
 def is_active_model(model_name, metrics):
-    if model_name in INACTIVE_MODELS:
-        return False
-
-    accuracy = metrics.get("accuracy") if metrics else None
-    if accuracy is None:
-        return False
-
-    return accuracy >= MIN_ACTIVE_ACCURACY
+    return metrics is not None
 
 
 def build_registry(source="local"):

@@ -148,6 +148,19 @@ def load_pitcher_data():
 pitcher_list, pitcher_handedness = load_pitcher_data()
 
 
+def format_model_label(model_name):
+    accuracy = MODELS[model_name]["meta"].get("accuracy")
+    if accuracy is None:
+        return model_name
+
+    return f"{model_name} ({accuracy:.3f} acc)"
+
+
+MODEL_LABELS = {model_name: format_model_label(model_name) for model_name in MODELS}
+MODEL_OPTIONS = list(MODELS.keys())
+DEFAULT_MODELS = MODEL_OPTIONS[: min(3, len(MODEL_OPTIONS))]
+
+
 def normalize_prev_pitch(prev_pitch):
     if prev_pitch in PITCH_NAMES:
         return prev_pitch
@@ -240,8 +253,10 @@ def predict_pitch(selected_models, **kwargs):
 def render_prediction_results(results):
     if len(results) == 1:
         model_name, result = next(iter(results.items()))
+        accuracy = MODELS[model_name]["meta"].get("accuracy")
+        accuracy_text = f" ({accuracy:.3f} acc)" if accuracy is not None else ""
         st.success(
-            f"{model_name}: **{PITCH_NAMES.get(result['pitch_code'], result['pitch_code'])}**"
+            f"{MODEL_LABELS[model_name]}: **{PITCH_NAMES.get(result['pitch_code'], result['pitch_code'])}**"
         )
         if result["probabilities"] is not None:
             st.dataframe(result["probabilities"], use_container_width=True)
@@ -251,7 +266,8 @@ def render_prediction_results(results):
     for model_name, result in results.items():
         summary_rows.append(
             {
-                "Model": model_name,
+                "Model": MODEL_LABELS[model_name],
+                "Accuracy": MODELS[model_name]["meta"].get("accuracy"),
                 "Predicted Pitch": PITCH_NAMES.get(result["pitch_code"], result["pitch_code"]),
             }
         )
@@ -260,14 +276,13 @@ def render_prediction_results(results):
 
     for model_name, result in results.items():
         if result["probabilities"] is not None:
-            st.subheader(f"{model_name} probabilities")
+            st.subheader(f"{MODEL_LABELS[model_name]} probabilities")
             st.dataframe(result["probabilities"], use_container_width=True)
 
 
 st.title("MLB Pitch Predictor")
 
 available_model_names = list(MODELS.keys())
-default_models = available_model_names[:1]
 
 tab1, tab2 = st.tabs(["Live Games", "Manual Setup"])
 
@@ -276,10 +291,13 @@ with tab1:
 
     live_selected_models = st.multiselect(
         "Models to run",
-        available_model_names,
-        default=default_models,
+        MODEL_OPTIONS,
+        default=DEFAULT_MODELS,
+        format_func=lambda model_name: MODEL_LABELS[model_name],
         key="live_models",
     )
+
+    st.caption("Model accuracy shown is the most recent saved evaluation accuracy.")
 
     today = st.date_input("Game date", value=date.today()).strftime("%Y-%m-%d")
     games = get_games_on_date(today)
@@ -349,8 +367,9 @@ with tab2:
 
     manual_selected_models = st.multiselect(
         "Models to run",
-        available_model_names,
-        default=default_models,
+        MODEL_OPTIONS,
+        default=DEFAULT_MODELS,
+        format_func=lambda model_name: MODEL_LABELS[model_name],
         key="manual_models",
     )
 

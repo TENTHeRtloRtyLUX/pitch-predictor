@@ -40,7 +40,7 @@
     "feature_columns_filename": "logistic_regression_feature_columns.pkl",
     "metrics_filename": "logistic_regression_metrics.json",
     "accuracy": 0.29098360655737704,
-    "active": false,
+    "active": true,
     "source": "huggingface"
   },
   {
@@ -51,7 +51,7 @@
     "feature_columns_filename": "random_forest_feature_columns.pkl",
     "metrics_filename": "random_forest_metrics.json",
     "accuracy": 0.47540983606557374,
-    "active": false,
+    "active": true,
     "source": "huggingface"
   },
   {
@@ -62,7 +62,7 @@
     "feature_columns_filename": "sgd_classifier_feature_columns.pkl",
     "metrics_filename": "sgd_classifier_metrics.json",
     "accuracy": 0.04918032786885246,
-    "active": false,
+    "active": true,
     "source": "huggingface"
   },
   {
