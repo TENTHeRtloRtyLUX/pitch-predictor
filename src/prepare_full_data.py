@@ -14,15 +14,22 @@ def add_count_feature(df):
 def add_at_bat_and_pitch_features(df):
     df = df.copy()
 
-    df = df.sort_values(["game_id", "pitcher_name", "batter_name"]).reset_index(drop=True)
+    required_temporal_columns = {"game_id", "at_bat_index", "play_event_index"}
+    if required_temporal_columns.issubset(df.columns):
+        df = df.sort_values(["game_id", "at_bat_index", "play_event_index"]).reset_index(drop=True)
+        if "at_bat_number" not in df.columns:
+            df["at_bat_number"] = df["at_bat_index"] + 1
+        if "pitch_number" not in df.columns:
+            df["pitch_number"] = df.groupby(["game_id", "at_bat_index"]).cumcount() + 1
+        group_columns = ["game_id", "at_bat_index"]
+    else:
+        raise ValueError(
+            "Pitch data is missing true temporal identifiers. Expected "
+            "'game_id', 'at_bat_index', and 'play_event_index'."
+        )
 
-    df["at_bat_number"] = (df.groupby("game_id")["batter_name"].transform(lambda x: (x != x.shift()).cumsum()))
-
-    df["pitch_number"] = df.groupby(["game_id", "at_bat_number"]).cumcount() + 1
-
-    df = df.sort_values(["game_id", "at_bat_number", "pitch_number"]).reset_index(drop=True)
-
-    df["prev_pitch"] = df.groupby(["game_id", "at_bat_number"])["pitch_type"].shift(1)
+    if "prev_pitch" not in df.columns:
+        df["prev_pitch"] = df.groupby(group_columns)["pitch_type"].shift(1)
 
     return df
 

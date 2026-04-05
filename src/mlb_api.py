@@ -1,10 +1,15 @@
-import requests
-import pandas as pd
 import os
 import time
 
+import pandas as pd
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 BASE_URL = "https://statsapi.mlb.com/api/v1"
 REQUEST_TIMEOUT = 20
+MAX_RETRIES = 5
+BACKOFF_FACTOR = 1.5
 
 PITCH_NAMES = {
     "FF": "4-Seam Fastball",
@@ -22,8 +27,28 @@ PITCH_NAMES = {
 }
 
 
+def build_retry_session():
+    retry = Retry(
+        total=MAX_RETRIES,
+        read=MAX_RETRIES,
+        connect=MAX_RETRIES,
+        backoff_factor=BACKOFF_FACTOR,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET",),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+SESSION = build_retry_session()
+
+
 def fetch_json(url):
-    response = requests.get(url, timeout=REQUEST_TIMEOUT)
+    response = SESSION.get(url, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
     return response.json()
 
@@ -68,10 +93,16 @@ def get_pitches_from_game(game_id):
         p_throws = matchup.get("pitchHand", {}).get("code", "")
         stand = matchup.get("batSide", {}).get("code", "")
         is_home = play.get("about", {}).get("isTopInning", True) == False
+        at_bat_index = play.get("about", {}).get("atBatIndex")
+        if at_bat_index is None:
+            continue
 
-        for event in play.get("playEvents", []):
+        pitch_number = 0
+
+        for play_event_index, event in enumerate(play.get("playEvents", [])):
             if event.get("isPitch"):
                 count = event.get("count", {})
+                pitch_number += 1
 
                 if is_home:
                     score_diff = home_score - away_score
@@ -79,6 +110,12 @@ def get_pitches_from_game(game_id):
                     score_diff = away_score - home_score
 
                 pitches.append({
+                    "pitch_uid": f"{game_id}:{at_bat_index}:{play_event_index}",
+                    "game_id": game_id,
+                    "at_bat_index": at_bat_index,
+                    "at_bat_number": at_bat_index + 1,
+                    "play_event_index": play_event_index,
+                    "pitch_number": pitch_number,
                     "pitcher_name": pitcher_name,
                     "batter_name": batter_name,
                     "p_throws": p_throws,
@@ -94,7 +131,14 @@ def get_pitches_from_game(game_id):
                     "score_diff": score_diff,
                 })
 
-    return pd.DataFrame(pitches)
+    pitch_df = pd.DataFrame(pitches)
+    if pitch_df.empty:
+        return pitch_df
+
+    pitch_df = pitch_df.sort_values(
+        ["game_id", "at_bat_index", "play_event_index"]
+    ).reset_index(drop=True)
+    return pitch_df
 
 def get_live_game_state(game_id):
     """Get current state of a live or recent game"""

@@ -68,8 +68,10 @@ Older experiments and superseded scripts live under `src/legacy/`.
 The retained `pitches` dataset is intentionally compact. The active training pipeline expects:
 
 - `id`
+- `pitch_uid`
 - `game_id`
 - `season`
+- `at_bat_index`
 - `pitcher_name`
 - `batter_name`
 - `p_throws`
@@ -84,9 +86,12 @@ The retained `pitches` dataset is intentionally compact. The active training pip
 - `on_3b`
 - `score_diff`
 - `at_bat_number`
+- `play_event_index`
 - `pitch_number`
 - `prev_pitch`
 - `count`
+
+Sequence-related fields are now expected to come from true MLB play/event order rather than being reconstructed from batter-name changes.
 
 ## Local Development
 
@@ -130,6 +135,8 @@ The active tabular training pipeline supports:
 - LightGBM
 - CatBoost
 - Calibrated XGBoost
+
+Tabular preprocessing uses sparse feature matrices with hashing for high-cardinality categorical values so retraining scales better as historical data grows.
 
 Any trained model with a complete bundle and saved metrics can appear in the app and in the model leaderboard.
 

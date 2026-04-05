@@ -6,32 +6,41 @@ import sys
 sys.path.append("src")
 from mlb_api import get_all_games_for_season, get_pitches_from_game
 import time
+from prepare_full_data import prepare_pitch_data
 
 load_dotenv()
 
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
 VALID_PITCHES = ["FF", "SL", "SI", "CH", "FC", "CU", "ST", "FS", "KC"]
+MAX_RETRIES = 5
+BACKOFF_SECONDS = 2
+
+
+def execute_with_retry(query_factory, operation_name):
+    last_error = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            return query_factory().execute()
+        except Exception as exc:
+            last_error = exc
+            if attempt == MAX_RETRIES:
+                break
+            sleep_seconds = BACKOFF_SECONDS ** attempt
+            print(f"{operation_name} failed on attempt {attempt}/{MAX_RETRIES}: {exc}. Retrying in {sleep_seconds}s...")
+            time.sleep(sleep_seconds)
+
+    raise RuntimeError(f"{operation_name} failed after {MAX_RETRIES} attempts") from last_error
+
 
 def clean_season_data(df, season):
-    df = df.rename(columns={"outs": "outs_when_up"})
-    df = df[df["pitch_type"].isin(VALID_PITCHES)]
-    df["season"] = season
-    df["count"] = df["balls"].astype(str) + "-" + df["strikes"].astype(str)
-    df = df.sort_values(["game_id", "pitcher_name", "batter_name"])
-    df["at_bat_number"] = (
-        df.groupby("game_id")["batter_name"]
-        .transform(lambda x: (x != x.shift()).cumsum())
-    )
-    df["pitch_number"] = df.groupby(
-        ["game_id", "at_bat_number"]
-    ).cumcount() + 1
-    df = df.sort_values(["game_id", "at_bat_number", "pitch_number"])
-    df["prev_pitch"] = df.groupby(
-        ["game_id", "at_bat_number"]
-    )["pitch_type"].shift(1)
-    df = df.dropna(subset=["prev_pitch", "pitch_type"])
-    return df
+    if df.empty:
+        return df
+
+    prepared_df = prepare_pitch_data(df, valid_pitches=VALID_PITCHES)
+    prepared_df["season"] = season
+    return prepared_df
 
 def get_done_games(season):
     all_games = []
@@ -39,9 +48,12 @@ def get_done_games(season):
     page_size = 1000
     
     while True:
-        response = supabase.table("uploaded_games").select("game_id").eq("season", season).range(
-            page * page_size, (page + 1) * page_size - 1
-        ).execute()
+        response = execute_with_retry(
+            lambda: supabase.table("uploaded_games").select("game_id").eq("season", season).range(
+                page * page_size, (page + 1) * page_size - 1
+            ),
+            operation_name=f"load uploaded games for season {season}",
+        )
         
         if not response.data:
             break
@@ -53,13 +65,19 @@ def get_done_games(season):
 
 def mark_games_done(game_ids, season):
     records = [{"game_id": gid, "season": season} for gid in game_ids]
-    supabase.table("uploaded_games").upsert(records, on_conflict="game_id").execute()
+    execute_with_retry(
+        lambda: supabase.table("uploaded_games").upsert(records, on_conflict="game_id"),
+        operation_name=f"mark uploaded games for season {season}",
+    )
 
 def upsert_pitchers(df):
     pitcher_df = df[["pitcher_name", "p_throws"]].drop_duplicates()
     pitcher_df = pitcher_df.rename(columns={"pitcher_name": "name", "p_throws": "throws"})
     records = pitcher_df.to_dict(orient="records")
-    supabase.table("pitchers").upsert(records, on_conflict="name").execute()
+    execute_with_retry(
+        lambda: supabase.table("pitchers").upsert(records, on_conflict="name"),
+        operation_name="upsert pitchers",
+    )
 
 def upload_season(season, batch_size=5000):
     print(f"\nProcessing season {season}...")
@@ -89,20 +107,45 @@ def upload_season(season, batch_size=5000):
 
         batch_df = pd.concat(batch_data, ignore_index=True)
         batch_df = clean_season_data(batch_df, season)
-        batch_df = batch_df.rename(columns={"outs_when_up": "outs"})
 
-        cols = ["game_id", "pitcher_name", "batter_name", "p_throws", "stand",
-                "pitch_type", "balls", "strikes", "outs", "inning",
-                "on_1b", "on_2b", "on_3b", "score_diff", "season",
-                "prev_pitch", "count", "pitch_number", "at_bat_number"]
+        if batch_df.empty:
+            continue
+
+        cols = [
+            "pitch_uid",
+            "game_id",
+            "season",
+            "at_bat_index",
+            "at_bat_number",
+            "play_event_index",
+            "pitch_number",
+            "pitcher_name",
+            "batter_name",
+            "p_throws",
+            "stand",
+            "pitch_type",
+            "balls",
+            "strikes",
+            "outs",
+            "inning",
+            "on_1b",
+            "on_2b",
+            "on_3b",
+            "score_diff",
+            "prev_pitch",
+            "count",
+        ]
         batch_df = batch_df[cols]
 
         records = batch_df.to_dict(orient="records")
         for j in range(0, len(records), batch_size):
             chunk = records[j:j+batch_size]
-            supabase.table("pitches").upsert(
-                chunk, on_conflict="game_id,at_bat_number,pitch_number"
-            ).execute()
+            execute_with_retry(
+                lambda chunk=chunk: supabase.table("pitches").upsert(
+                    chunk, on_conflict="pitch_uid"
+                ),
+                operation_name=f"upsert pitches for season {season}",
+            )
 
         upsert_pitchers(batch_df)
 

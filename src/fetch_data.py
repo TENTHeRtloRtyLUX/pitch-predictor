@@ -1,37 +1,31 @@
 import pandas as pd
-from supabase import create_client
-import os
-from dotenv import load_dotenv
+from supabase_data_loader import iter_pitches_from_supabase
 
-load_dotenv()
 
-supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+def fetch_all_pitches(seasons, page_size=1000):
+    frames = []
 
-def fetch_all_pitches():
-    all_pitches = []
-    page = 0
-    page_size = 1000
+    for i, batch_df in enumerate(
+        iter_pitches_from_supabase(seasons=seasons, batch_size=page_size),
+        start=1,
+    ):
+        if batch_df.empty:
+            continue
 
-    while True:
-        response = supabase.table("pitches").select("*").range(
-            page * page_size, (page + 1) * page_size - 1
-        ).execute()
+        frames.append(batch_df)
 
-        if not response.data:
-            break
+        if i % 100 == 0:
+            print(f"Fetched {sum(len(frame) for frame in frames)} pitches so far...")
 
-        all_pitches.extend(response.data)
-        page += 1
+    if not frames:
+        return pd.DataFrame()
 
-        if page % 100 == 0:
-            print(f"Fetched {len(all_pitches)} pitches so far...")
-
-    df = pd.DataFrame(all_pitches)
+    df = pd.concat(frames, ignore_index=True)
     print(f"Total pitches fetched: {len(df)}")
     return df
 
 if __name__ == "__main__":
-    df = fetch_all_pitches()
+    df = fetch_all_pitches(seasons=[2023, 2024, 2025])
     df.to_csv("data/training_data.csv", index=False)
     print("Saved to data/training_data.csv")
 

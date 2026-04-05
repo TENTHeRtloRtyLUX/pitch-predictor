@@ -68,8 +68,8 @@ def load_model_registry():
 def load_model_artifacts(model_name, model_path, label_encoder_path, feature_columns_path):
     model = joblib.load(model_path)
     label_encoder = joblib.load(label_encoder_path)
-    feature_columns = joblib.load(feature_columns_path)
-    return model, label_encoder, feature_columns
+    feature_artifact = joblib.load(feature_columns_path)
+    return model, label_encoder, feature_artifact
 
 
 @st.cache_resource
@@ -87,7 +87,7 @@ def load_registry_models():
             label_encoder_path = entry["label_encoder_path"]
             feature_columns_path = entry["feature_columns_path"]
 
-        model, label_encoder, feature_columns = load_model_artifacts(
+        model, label_encoder, feature_artifact = load_model_artifacts(
             entry["name"],
             model_path,
             label_encoder_path,
@@ -98,7 +98,7 @@ def load_registry_models():
             "meta": entry,
             "model": model,
             "label_encoder": label_encoder,
-            "feature_columns": feature_columns,
+            "feature_columns": feature_artifact,
         }
 
     return loaded_models
@@ -229,17 +229,22 @@ def predict_with_model(model_name, features_df):
     model_bundle = MODELS[model_name]
     model = model_bundle["model"]
     label_encoder = model_bundle["label_encoder"]
-    feature_columns = model_bundle["feature_columns"]
+    feature_artifact = model_bundle["feature_columns"]
 
-    input_df = pd.get_dummies(features_df)
-    input_df = input_df.reindex(columns=feature_columns, fill_value=0)
+    if hasattr(feature_artifact, "transform"):
+        model_input = feature_artifact.transform(features_df)
+        if model_name in {"random_forest", "catboost"}:
+            model_input = model_input.toarray()
+    else:
+        input_df = pd.get_dummies(features_df)
+        model_input = input_df.reindex(columns=feature_artifact, fill_value=0)
 
-    pred = model.predict(input_df)[0]
+    pred = model.predict(model_input)[0]
     pitch_code = label_encoder.inverse_transform([pred])[0]
 
     proba_df = None
     if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(input_df)[0]
+        proba = model.predict_proba(model_input)[0]
         proba_df = pd.DataFrame(
             {
                 "Pitch Type": [PITCH_NAMES.get(c, c) for c in label_encoder.classes_],
