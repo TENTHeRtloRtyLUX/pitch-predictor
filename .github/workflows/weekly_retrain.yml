@@ -52,7 +52,7 @@ jobs:
         run: python src/load_to_supabase.py
 
       - name: Build shared retraining artifacts
-        run: python src/prepare_retraining_artifacts.py --seasons "$RETRAIN_SEASONS" --output-dir output/retrain_shared
+        run: python src/prepare_retraining_artifacts.py --seasons "$RETRAIN_SEASONS" --output-dir output/retrain_shared --batch-size 250
 
       - name: Upload prep artifacts
         uses: actions/upload-artifact@v4
