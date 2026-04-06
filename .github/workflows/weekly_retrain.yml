@@ -96,7 +96,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: retrain-prep
-          path: output/retrain_shared
+          path: .
 
       - name: Train tabular model
         run: |
@@ -143,7 +143,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: retrain-prep
-          path: output/retrain_shared
+          path: .
 
       - name: Train sequence model
         run: |
@@ -193,7 +193,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: retrain-prep
-          path: output/retrain_shared
+          path: .
 
       - name: Download all model artifacts
         uses: actions/download-artifact@v4
