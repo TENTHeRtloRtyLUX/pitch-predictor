@@ -349,7 +349,19 @@ def save_sequence_training_dataset(dataset, output_path):
 
 
 def load_sequence_training_dataset(input_path):
-    return joblib.load(input_path)
+    input_path = Path(input_path)
+    candidate_paths = [
+        input_path,
+        Path("retrain_shared") / input_path.name,
+        Path("output") / input_path.name,
+    ]
+    for candidate in candidate_paths:
+        if candidate.exists():
+            return joblib.load(candidate)
+    raise FileNotFoundError(
+        "Prepared sequence dataset not found. Checked: "
+        + ", ".join(str(path) for path in candidate_paths)
+    )
 
 
 def save_sequence_preprocessor(preprocessor, output_path):
