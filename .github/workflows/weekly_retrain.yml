@@ -36,10 +36,10 @@ jobs:
       RETRAIN_SEASONS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.seasons || '2023,2024,2025' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -80,10 +80,10 @@ jobs:
           - calibrated_xgboost
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -127,10 +127,10 @@ jobs:
           - transformer
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -177,10 +177,10 @@ jobs:
       UPLOAD_ENABLED: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.upload_enabled || 'false' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
