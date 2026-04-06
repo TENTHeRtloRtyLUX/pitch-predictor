@@ -192,7 +192,19 @@ def get_trainer_map(X_train, y_train, sample_weights):
 
 def load_or_build_training_dataframe(seasons, prepared_training_path=None):
     if prepared_training_path:
-        return joblib.load(prepared_training_path)
+        prepared_path = Path(prepared_training_path)
+        candidate_paths = [
+            prepared_path,
+            Path("retrain_shared") / prepared_path.name,
+            Path("output") / prepared_path.name,
+        ]
+        for candidate in candidate_paths:
+            if candidate.exists():
+                return joblib.load(candidate)
+        raise FileNotFoundError(
+            f"Prepared training dataframe not found. Checked: "
+            f"{', '.join(str(path) for path in candidate_paths)}"
+        )
     return build_training_dataframe(seasons=list(seasons))
 
 
