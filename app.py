@@ -271,7 +271,7 @@ def predict_with_tabular_model(model_bundle, model_name, features_df):
 
     if hasattr(feature_artifact, "transform"):
         model_input = feature_artifact.transform(features_df)
-        if model_name in {"random_forest", "catboost"}:
+        if model_name == "catboost":
             model_input = model_input.toarray()
     else:
         input_df = pd.get_dummies(features_df)

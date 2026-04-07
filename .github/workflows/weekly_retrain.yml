@@ -55,7 +55,7 @@ jobs:
         run: python src/prepare_retraining_artifacts.py --seasons "$RETRAIN_SEASONS" --output-dir output/retrain_shared --batch-size 250
 
       - name: Upload prep artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: retrain-prep
           path: |
@@ -93,7 +93,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Download prep artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: retrain-prep
           path: .
@@ -107,7 +107,7 @@ jobs:
             --metrics-dir output/model_artifacts/metrics
 
       - name: Upload model artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: tabular-${{ matrix.model_name }}
           path: |
@@ -140,7 +140,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Download prep artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: retrain-prep
           path: .
@@ -154,7 +154,7 @@ jobs:
             --metrics-dir output/model_artifacts/metrics
 
       - name: Upload sequence artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: sequence-${{ matrix.model_type }}
           path: |
@@ -190,20 +190,20 @@ jobs:
           pip install -r requirements.txt
 
       - name: Download prep artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: retrain-prep
           path: .
 
       - name: Download all model artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: "tabular-*"
           path: output/downloaded_artifacts/tabular
           merge-multiple: false
 
       - name: Download all sequence artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: "sequence-*"
           path: output/downloaded_artifacts/sequence
@@ -235,7 +235,7 @@ jobs:
 
       - name: Upload run artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: weekly-retrain-artifacts
           path: |

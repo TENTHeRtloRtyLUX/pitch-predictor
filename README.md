@@ -9,7 +9,7 @@ Live app: [pitch-predictor.streamlit.app](https://pitch-predictor.streamlit.app)
 The project now supports:
 
 - incremental MLB ingest into Supabase with a persisted overlap watermark
-- weekly retraining orchestration with guardrails and staged promotion
+- a weekly retraining workflow split into prep, parallel training, and assembly stages
 - side-by-side tabular, LSTM, and transformer model bundles
 - runtime model routing in the app based on `model_type`
 
@@ -42,9 +42,24 @@ The project now supports:
 |------|-------------|
 | `src/train_tabular_models.py` | Trains the tabular model suite and writes bundle metadata |
 | `src/train_sequence_models.py` | Trains LSTM or transformer sequence models |
+| `src/prepare_retraining_artifacts.py` | Builds the shared retraining dataframe and sequence dataset used by the workflow |
+| `src/assemble_retrain_artifacts.py` | Promotes trained artifacts into production folders, rebuilds the registry, and optionally uploads |
 | `src/build_model_registry.py` | Builds the registry from saved bundle metadata and metrics |
 | `src/upload_models.py` | Uploads model bundles, metrics, registry, and tendency files to Hugging Face |
-| `src/run_weekly_retrain.py` | Weekly orchestration entrypoint with staging, guardrails, and persistent run state |
+| `src/run_weekly_retrain.py` | Local orchestration entrypoint with sequential staging, guardrails, and persistent run state |
+
+### Legacy
+| File | Description |
+|------|-------------|
+| `src/legacy/fetch_data.py` | Superseded pitch export script retained for reference |
+| `src/legacy/train_full_xgb_v2.py` | Superseded one-off XGBoost training script retained for reference |
+| `src/legacy/train_full_xgb.py` | Earlier XGBoost training script retained for reference |
+| `src/legacy/train_rf.py` | Earlier random forest training script retained for reference |
+| `src/legacy/train_hybrid.py` | Older hybrid training workflow retained for reference |
+| `src/legacy/train_lstm.py` | Older sequence training workflow retained for reference |
+| `src/legacy/train_model.py` | Older generic training script retained for reference |
+| `src/legacy/train_xgb.py` | Older XGBoost training script retained for reference |
+| `src/legacy/tune_model.py` | Older tuning script retained for reference |
 
 ## Ingest Workflow
 
@@ -77,12 +92,11 @@ Manual local workflow:
 
 ```bash
 python src/load_to_supabase.py
-python src/training_data_pipeline.py
-python src/train_tabular_models.py
-python src/train_sequence_models.py --model-type lstm
-python src/train_sequence_models.py --model-type transformer
-python src/build_model_registry.py
-python src/upload_models.py
+python src/prepare_retraining_artifacts.py --seasons 2023,2024,2025 --output-dir output/retrain_shared --batch-size 250
+python src/train_tabular_models.py --prepared-training-path output/retrain_shared/training_dataframe.joblib --models-dir output/collected_models/models --metrics-dir output/collected_models/metrics
+python src/train_sequence_models.py --model-type lstm --prepared-sequence-path output/retrain_shared/sequence_dataset.joblib --models-dir output/collected_models/models --metrics-dir output/collected_models/metrics
+python src/train_sequence_models.py --model-type transformer --prepared-sequence-path output/retrain_shared/sequence_dataset.joblib --models-dir output/collected_models/models --metrics-dir output/collected_models/metrics
+python src/assemble_retrain_artifacts.py --prep-dir output/retrain_shared --trained-models-dir output/collected_models/models --trained-metrics-dir output/collected_models/metrics
 ```
 
 Weekly orchestration:
@@ -100,6 +114,14 @@ Guardrails in the weekly flow:
 - regression guard that blocks upload if the new best tabular accuracy drops past the threshold
 - persistent run state in `output/weekly_retrain_state.json`
 - latest run summary in `output/weekly_retrain_summary.json`
+
+The GitHub Actions workflow uses the staged pipeline directly instead of the sequential local wrapper:
+
+1. `src/load_to_supabase.py`
+2. `src/prepare_retraining_artifacts.py`
+3. parallel tabular training with `src/train_tabular_models.py`
+4. parallel sequence training with `src/train_sequence_models.py`
+5. `src/assemble_retrain_artifacts.py`
 
 ## Model Types
 
@@ -132,6 +154,8 @@ Artifacts uploaded on every run:
 - weekly retrain summary
 - ingest summary
 - failure logs when present
+
+The workflow trains tabular and sequence models in parallel matrix jobs, then downloads the outputs into an assembly job that rebuilds the registry and optionally uploads the bundle set to Hugging Face.
 
 ## Notes
 

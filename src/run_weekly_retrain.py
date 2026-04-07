@@ -129,6 +129,12 @@ def run_weekly_retrain(
     previous_best_accuracy = get_previous_best_accuracy()
     step_summaries = []
 
+    def get_step_result(step_name):
+        for step_summary in step_summaries:
+            if step_summary.get("step") == step_name:
+                return step_summary["result"]
+        raise KeyError(f"Step '{step_name}' was not recorded in the weekly retrain summary.")
+
     try:
         with fail_fast_lock():
             step_summaries.append(
@@ -177,7 +183,7 @@ def run_weekly_retrain(
                 )
             )
 
-            new_best_accuracy = step_summaries[2]["result"]["best_accuracy"]
+            new_best_accuracy = get_step_result("tabular_training")["best_accuracy"]
             if (
                 previous_best_accuracy is not None
                 and new_best_accuracy < previous_best_accuracy - accuracy_drop_threshold
@@ -211,7 +217,7 @@ def run_weekly_retrain(
         summary = {
             "success": True,
             "previous_best_accuracy": previous_best_accuracy,
-            "new_best_accuracy": step_summaries[2]["result"]["best_accuracy"],
+            "new_best_accuracy": get_step_result("tabular_training")["best_accuracy"],
             "upload_enabled": allow_upload,
             "steps": step_summaries,
         }

@@ -33,6 +33,16 @@ ALL_TABULAR_MODELS = [
     "calibrated_xgboost",
 ]
 
+RANDOM_FOREST_PARAMS = {
+    "n_estimators": 80,
+    "max_depth": 24,
+    "min_samples_leaf": 2,
+    "max_samples": 0.5,
+    "class_weight": "balanced",
+    "random_state": 42,
+    "n_jobs": -1,
+}
+
 
 def ensure_output_dirs(models_dir=MODELS_DIR, metrics_dir=METRICS_DIR):
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -109,13 +119,8 @@ def train_sgd_classifier(X_train, y_train):
 
 
 def train_random_forest(X_train, y_train):
-    model = RandomForestClassifier(
-        n_estimators=100,
-        class_weight="balanced",
-        random_state=42,
-        n_jobs=-1,
-    )
-    model.fit(to_dense_if_needed(X_train), y_train)
+    model = RandomForestClassifier(**RANDOM_FOREST_PARAMS)
+    model.fit(X_train, y_train)
     return model
 
 
@@ -178,6 +183,10 @@ def to_dense_if_needed(X):
     return X
 
 
+def model_requires_dense_input(model_name):
+    return model_name == "catboost"
+
+
 def get_trainer_map(X_train, y_train, sample_weights):
     return {
         "logistic_regression": lambda: train_logistic_regression(X_train, y_train),
@@ -225,7 +234,7 @@ def train_single_tabular_model(
 
     print(f"\nTraining {model_name}...")
     model = trainer_map[model_name]()
-    evaluation_X = to_dense_if_needed(X_test) if model_name in {"random_forest", "catboost"} else X_test
+    evaluation_X = to_dense_if_needed(X_test) if model_requires_dense_input(model_name) else X_test
     metrics = evaluate_model(model, evaluation_X, y_test, label_encoder)
     print(f"{model_name} accuracy: {metrics['accuracy']:.4f}")
 
@@ -254,10 +263,15 @@ def train_tabular_model_suite(
     metrics_dir=METRICS_DIR,
     prepared_training_path=None,
     model_names=None,
+    training_df=None,
 ):
     ensure_output_dirs(models_dir=models_dir, metrics_dir=metrics_dir)
 
-    training_df = load_or_build_training_dataframe(seasons=seasons, prepared_training_path=prepared_training_path)
+    if training_df is None:
+        training_df = load_or_build_training_dataframe(
+            seasons=seasons,
+            prepared_training_path=prepared_training_path,
+        )
     X, y, label_encoder, preprocessor = prepare_tabular_features(training_df)
 
     X_train, X_test, y_train, y_test = split_training_data(X, y)
@@ -275,7 +289,7 @@ def train_tabular_model_suite(
             raise ValueError(f"Unsupported model_name: {model_name}")
         model = trainer_map[model_name]()
 
-        evaluation_X = to_dense_if_needed(X_test) if model_name in {"random_forest", "catboost"} else X_test
+        evaluation_X = to_dense_if_needed(X_test) if model_requires_dense_input(model_name) else X_test
         metrics = evaluate_model(model, evaluation_X, y_test, label_encoder)
         print(f"{model_name} accuracy: {metrics['accuracy']:.4f}")
 
@@ -332,6 +346,7 @@ def main():
             models_dir=models_dir,
             metrics_dir=metrics_dir,
             prepared_training_path=args.prepared_training_path,
+            training_df=training_df,
         )
     print(json.dumps(summary, indent=2))
 
