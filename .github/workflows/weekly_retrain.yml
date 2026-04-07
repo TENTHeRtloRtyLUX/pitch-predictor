@@ -11,10 +11,14 @@ on:
         description: Maximum allowed best-accuracy regression before upload is blocked
         required: true
         default: "0.02"
+      start_year:
+        description: Earliest season year to include when seasons is left blank
+        required: false
+        default: "2023"
       seasons:
-        description: Comma-separated seasons to train on
-        required: true
-        default: "2023,2024,2025"
+        description: Optional comma-separated seasons override; leave blank to use start_year through current year
+        required: false
+        default: ""
   schedule:
     - cron: "0 9 * * 1"
 
@@ -33,7 +37,8 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      RETRAIN_SEASONS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.seasons || '2023,2024,2025' }}
+      RETRAIN_START_YEAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.start_year || '2023' }}
+      RETRAIN_SEASONS_OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.seasons || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -50,6 +55,12 @@ jobs:
 
       - name: Incremental ingest
         run: python src/load_to_supabase.py
+
+      - name: Resolve retraining seasons
+        run: |
+          resolved_seasons=$(python src/resolve_retrain_seasons.py --start-year "$RETRAIN_START_YEAR" --seasons "$RETRAIN_SEASONS_OVERRIDE")
+          echo "RETRAIN_SEASONS=$resolved_seasons" >> "$GITHUB_ENV"
+          echo "Resolved retraining seasons: $resolved_seasons"
 
       - name: Build shared retraining artifacts
         run: python src/prepare_retraining_artifacts.py --seasons "$RETRAIN_SEASONS" --output-dir output/retrain_shared --batch-size 250
