@@ -93,7 +93,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Download prep artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: retrain-prep
           path: .
@@ -140,7 +140,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Download prep artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: retrain-prep
           path: .
@@ -190,20 +190,20 @@ jobs:
           pip install -r requirements.txt
 
       - name: Download prep artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: retrain-prep
           path: .
 
       - name: Download all model artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: "tabular-*"
           path: output/downloaded_artifacts/tabular
           merge-multiple: false
 
       - name: Download all sequence artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: "sequence-*"
           path: output/downloaded_artifacts/sequence
