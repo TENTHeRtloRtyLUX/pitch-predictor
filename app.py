@@ -489,11 +489,11 @@ if not MODELS:
 
 if not TENSORFLOW_AVAILABLE:
     st.warning(
-        \"⚠️ TensorFlow is not available. Sequence models (LSTM, Transformer) cannot be loaded. \"
-        \"Only tabular models are available.\"
+        "⚠️ TensorFlow is not available. Sequence models (LSTM, Transformer) cannot be loaded. "
+        "Only tabular models are available."
     )
 
-st.caption(f\"Available models: {len(MODELS)} loaded\")
+st.caption(f"Available models: {len(MODELS)} loaded")
 accuracy_table = build_model_accuracy_table()
 if not accuracy_table.empty:
     st.dataframe(
