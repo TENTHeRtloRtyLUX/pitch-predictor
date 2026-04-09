@@ -111,6 +111,10 @@ def load_registry_models():
     registry = [entry for entry in load_model_registry() if entry.get("active", True)]
     loaded_models = {}
     failed_models = []
+    
+    # Log file for diagnostics (helpful for Streamlit Cloud)
+    log_file = Path("model_loading_log.txt")
+    log_messages = []
 
     for entry in registry:
         try:
@@ -140,13 +144,20 @@ def load_registry_models():
                 "feature_columns": feature_artifact,
                 "preprocessor": preprocessor,
             }
+            log_messages.append(f"✅ Loaded {entry['name']} ({entry.get('model_type', 'tabular')})")
         except Exception as e:
             failed_models.append((entry["name"], str(e)))
+            log_messages.append(f"❌ Failed to load {entry['name']}: {type(e).__name__}: {str(e)[:100]}")
 
+    # Write log file
+    with open(log_file, "w") as f:
+        f.write("\n".join(log_messages))
+    
+    # Print to console (visible in local terminal)
+    print("\n".join(log_messages))
+    
     if failed_models:
-        print(f"Failed to load {len(failed_models)} models:")
-        for model_name, error in failed_models:
-            print(f"  - {model_name}: {error}")
+        print(f"\n⚠️  Failed to load {len(failed_models)} models (see model_loading_log.txt)")
 
     return loaded_models
 
