@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
-from supabase import create_client
 
 sys.path.append("src")
 from mlb_api import (
@@ -18,6 +17,7 @@ from mlb_api import (
     get_pitches_from_game,
 )
 from prepare_full_data import prepare_pitch_data
+from supabase_client import get_supabase_service_client
 
 load_dotenv()
 
@@ -61,11 +61,18 @@ PITCH_COLUMNS = [
 
 
 def get_supabase_client():
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_KEY")
-    if not url or not key:
-        raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY in environment.")
-    return create_client(url, key)
+    """Get service role client for upsert/system operations.
+    
+    Note: This uses the service role key which bypasses RLS policies.
+    This is appropriate for:
+    - System operations (upserting data)
+    - Managing pipeline state
+    - Operations that need unrestricted access
+    
+    Read-only user queries should use get_supabase_authenticated_client()
+    if RLS protection is required.
+    """
+    return get_supabase_service_client()
 
 
 supabase = get_supabase_client()

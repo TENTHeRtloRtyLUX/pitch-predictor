@@ -20,7 +20,15 @@ MODEL_REPO_ID = "rkhosla/pitch-predictor"
 LOCAL_REGISTRY_PATH = Path("models/model_registry.json")
 LOCAL_DATA_DIR = Path("data")
 
-supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+def get_app_supabase_client():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets.get("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_KEY")
+    if not key:
+        raise KeyError("Missing SUPABASE_ANON_KEY (or legacy SUPABASE_KEY) in Streamlit secrets.")
+    return create_client(url, key)
+
+
+supabase = get_app_supabase_client()
 
 
 @st.cache_resource
