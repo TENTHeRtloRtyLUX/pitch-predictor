@@ -138,7 +138,7 @@ def load_registry_models():
             
             # Try to load model artifacts
             model_path = load_artifact(entry, "model_filename", "model_path")
-            log_messages.append(f"  → Model path: {model_path}")
+            log_messages.append(f"  -> Model path: {model_path}")
             
             label_encoder_path = load_artifact(entry, "label_encoder_filename", "label_encoder_path")
             log_messages.append(f"  → Label encoder path: {label_encoder_path}")
@@ -148,14 +148,14 @@ def load_registry_models():
 
             if entry.get("feature_columns_filename"):
                 feature_path = load_artifact(entry, "feature_columns_filename", "feature_columns_path")
-                log_messages.append(f"  → Feature columns path: {feature_path}")
+                log_messages.append(f"  -> Feature columns path: {feature_path}")
                 
             if entry.get("preprocessor_filename"):
                 preprocessor_path = load_artifact(entry, "preprocessor_filename", "preprocessor_path")
-                log_messages.append(f"  → Preprocessor path: {preprocessor_path}")
+                log_messages.append(f"  -> Preprocessor path: {preprocessor_path}")
 
             # Load model artifacts
-            log_messages.append(f"  → Loading model artifacts...")
+            log_messages.append(f"  -> Loading model artifacts...")
             model, label_encoder, feature_artifact, preprocessor = load_model_artifacts(
                 model_name,
                 model_type,
@@ -164,7 +164,7 @@ def load_registry_models():
                 feature_path,
                 preprocessor_path,
             )
-            log_messages.append(f"  → Model type: {type(model).__name__}")
+            log_messages.append(f"  -> Model type: {type(model).__name__}")
 
             loaded_models[entry["name"]] = {
                 "meta": entry,
@@ -173,12 +173,12 @@ def load_registry_models():
                 "feature_columns": feature_artifact,
                 "preprocessor": preprocessor,
             }
-            log_messages.append(f"✅ Successfully loaded {model_name}")
+            log_messages.append(f"[OK] Successfully loaded {model_name}")
         except Exception as e:
             import traceback
             failed_models.append((model_name, str(e)))
             error_trace = traceback.format_exc()
-            log_messages.append(f"❌ Failed to load {model_name}:")
+            log_messages.append(f"[ERROR] Failed to load {model_name}:")
             log_messages.append(f"   Error: {type(e).__name__}: {str(e)}")
             log_messages.append(f"   Full trace: {error_trace[-200:]}")
 
@@ -189,15 +189,15 @@ def load_registry_models():
         for name, err in failed_models:
             log_messages.append(f"  - {name}: {err[:80]}")
 
-    # Write log file
-    with open(log_file, "w") as f:
+    # Write log file (UTF-8 encoding for Unicode support)
+    with open(log_file, "w", encoding="utf-8") as f:
         f.write("\n".join(log_messages))
     
     # Print to console (visible in local terminal)
     print("\n".join(log_messages))
     
     if failed_models:
-        print(f"\n⚠️  Failed to load {len(failed_models)} models (see model_loading_log.txt)")
+        print(f"\n[WARNING] Failed to load {len(failed_models)} models (see model_loading_log.txt)")
 
     return loaded_models
 
