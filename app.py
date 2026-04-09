@@ -101,33 +101,45 @@ def load_model_artifacts(model_name, model_type, model_path, label_encoder_path,
 def load_registry_models():
     registry = [entry for entry in load_model_registry() if entry.get("active", True)]
     loaded_models = {}
+    failed_models = []
 
     for entry in registry:
-        model_path = load_artifact(entry, "model_filename", "model_path")
-        label_encoder_path = load_artifact(entry, "label_encoder_filename", "label_encoder_path")
-        feature_path = None
-        preprocessor_path = None
+        try:
+            model_path = load_artifact(entry, "model_filename", "model_path")
+            label_encoder_path = load_artifact(entry, "label_encoder_filename", "label_encoder_path")
+            feature_path = None
+            preprocessor_path = None
 
-        if entry.get("feature_columns_filename"):
-            feature_path = load_artifact(entry, "feature_columns_filename", "feature_columns_path")
-        if entry.get("preprocessor_filename"):
-            preprocessor_path = load_artifact(entry, "preprocessor_filename", "preprocessor_path")
+            if entry.get("feature_columns_filename"):
+                feature_path = load_artifact(entry, "feature_columns_filename", "feature_columns_path")
+            if entry.get("preprocessor_filename"):
+                preprocessor_path = load_artifact(entry, "preprocessor_filename", "preprocessor_path")
 
-        model, label_encoder, feature_artifact, preprocessor = load_model_artifacts(
-            entry["name"],
-            entry.get("model_type", "tabular"),
-            model_path,
-            label_encoder_path,
-            feature_path,
-            preprocessor_path,
-        )
+            model, label_encoder, feature_artifact, preprocessor = load_model_artifacts(
+                entry["name"],
+                entry.get("model_type", "tabular"),
+                model_path,
+                label_encoder_path,
+                feature_path,
+                preprocessor_path,
+            )
 
-        loaded_models[entry["name"]] = {
-            "meta": entry,
-            "model": model,
-            "label_encoder": label_encoder,
-            "feature_columns": feature_artifact,
-            "preprocessor": preprocessor,
+            loaded_models[entry["name"]] = {
+                "meta": entry,
+                "model": model,
+                "label_encoder": label_encoder,
+                "feature_columns": feature_artifact,
+                "preprocessor": preprocessor,
+            }
+        except Exception as e:
+            failed_models.append((entry["name"], str(e)))
+
+    if failed_models:
+        print(f"Failed to load {len(failed_models)} models:")
+        for model_name, error in failed_models:
+            print(f"  - {model_name}: {error}")
+
+    return loaded_models
         }
 
     return loaded_models
@@ -383,12 +395,21 @@ def render_prediction_results(results):
 
     summary_rows = []
     for model_name, result in results.items():
+        predicted_pitch_name = PITCH_NAMES.get(result["pitch_code"], result["pitch_code"])
+        
+        # Get confidence for the predicted pitch
+        confidence = None
+        if result["probabilities"] is not None and not result["probabilities"].empty:
+            prob_row = result["probabilities"][result["probabilities"]["Pitch Type"] == predicted_pitch_name]
+            if not prob_row.empty:
+                confidence = prob_row.iloc[0]["Probability"]
+        
         summary_rows.append(
             {
                 "Model": MODEL_LABELS[model_name],
                 "Type": MODELS[model_name]["meta"].get("model_type", "tabular"),
-                "Accuracy": MODELS[model_name]["meta"].get("accuracy"),
-                "Predicted Pitch": PITCH_NAMES.get(result["pitch_code"], result["pitch_code"]),
+                "Confidence": confidence,
+                "Predicted Pitch": predicted_pitch_name,
             }
         )
 
