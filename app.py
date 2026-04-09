@@ -259,6 +259,7 @@ def build_model_accuracy_table():
             {
                 "Model": MODEL_LABELS[model_name],
                 "Type": model_entry.get("model_type", "tabular"),
+                "Accuracy": model_entry.get("accuracy"),
                 "Description": model_entry.get("description", ""),
             }
         )
@@ -266,7 +267,7 @@ def build_model_accuracy_table():
     leaderboard = pd.DataFrame(rows)
     if leaderboard.empty:
         return leaderboard
-    return leaderboard.sort_values("Model", ascending=True).reset_index(drop=True)
+    return leaderboard.sort_values("Accuracy", ascending=False, na_position="last").reset_index(drop=True)
 
 
 def normalize_prev_pitch(prev_pitch):
@@ -514,6 +515,7 @@ if not accuracy_table.empty:
         accuracy_table,
         width="stretch",
         hide_index=True,
+        column_config={"Accuracy": st.column_config.NumberColumn(format="%.3f")},
     )
 
 tab1, tab2 = st.tabs(["Live Games", "Manual Setup"])
