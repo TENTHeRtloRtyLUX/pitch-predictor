@@ -1,6 +1,7 @@
 import json
 import sys
 import time
+import traceback
 from datetime import date
 from pathlib import Path
 
@@ -9,7 +10,14 @@ import pandas as pd
 import streamlit as st
 from huggingface_hub import hf_hub_download
 from supabase import create_client
-from tensorflow.keras.models import load_model
+
+# Try to import TensorFlow for sequence models
+try:
+    from tensorflow.keras.models import load_model
+    TENSORFLOW_AVAILABLE = True
+except ImportError as e:
+    TENSORFLOW_AVAILABLE = False
+    print(f"⚠️  TensorFlow not available: {e}")
 
 sys.path.append("src")
 from mlb_api import PITCH_NAMES, get_games_on_date, get_live_game_state
@@ -99,6 +107,11 @@ def load_model_artifacts(model_name, model_type, model_path, label_encoder_path,
     if model_type == "tabular":
         model = joblib.load(model_path)
     else:
+        if not TENSORFLOW_AVAILABLE:
+            raise ImportError(
+                f"Cannot load sequence model '{model_name}': TensorFlow is not available in this environment. "
+                "Sequence models require TensorFlow/Keras. Install with: pip install tensorflow"
+            )
         model = load_model(model_path)
     label_encoder = joblib.load(label_encoder_path)
     feature_artifact = joblib.load(feature_path) if feature_path else None
@@ -115,27 +128,43 @@ def load_registry_models():
     # Log file for diagnostics (helpful for Streamlit Cloud)
     log_file = Path("model_loading_log.txt")
     log_messages = []
+    log_messages.append(f"[{pd.Timestamp.now()}] Starting model loading for {len(registry)} models...")
 
     for entry in registry:
+        model_name = entry["name"]
+        model_type = entry.get("model_type", "tabular")
         try:
+            log_messages.append(f"\n[{pd.Timestamp.now()}] Loading {model_name} ({model_type})...")
+            
+            # Try to load model artifacts
             model_path = load_artifact(entry, "model_filename", "model_path")
+            log_messages.append(f"  → Model path: {model_path}")
+            
             label_encoder_path = load_artifact(entry, "label_encoder_filename", "label_encoder_path")
+            log_messages.append(f"  → Label encoder path: {label_encoder_path}")
+            
             feature_path = None
             preprocessor_path = None
 
             if entry.get("feature_columns_filename"):
                 feature_path = load_artifact(entry, "feature_columns_filename", "feature_columns_path")
+                log_messages.append(f"  → Feature columns path: {feature_path}")
+                
             if entry.get("preprocessor_filename"):
                 preprocessor_path = load_artifact(entry, "preprocessor_filename", "preprocessor_path")
+                log_messages.append(f"  → Preprocessor path: {preprocessor_path}")
 
+            # Load model artifacts
+            log_messages.append(f"  → Loading model artifacts...")
             model, label_encoder, feature_artifact, preprocessor = load_model_artifacts(
-                entry["name"],
-                entry.get("model_type", "tabular"),
+                model_name,
+                model_type,
                 model_path,
                 label_encoder_path,
                 feature_path,
                 preprocessor_path,
             )
+            log_messages.append(f"  → Model type: {type(model).__name__}")
 
             loaded_models[entry["name"]] = {
                 "meta": entry,
@@ -144,10 +173,21 @@ def load_registry_models():
                 "feature_columns": feature_artifact,
                 "preprocessor": preprocessor,
             }
-            log_messages.append(f"✅ Loaded {entry['name']} ({entry.get('model_type', 'tabular')})")
+            log_messages.append(f"✅ Successfully loaded {model_name}")
         except Exception as e:
-            failed_models.append((entry["name"], str(e)))
-            log_messages.append(f"❌ Failed to load {entry['name']}: {type(e).__name__}: {str(e)[:100]}")
+            import traceback
+            failed_models.append((model_name, str(e)))
+            error_trace = traceback.format_exc()
+            log_messages.append(f"❌ Failed to load {model_name}:")
+            log_messages.append(f"   Error: {type(e).__name__}: {str(e)}")
+            log_messages.append(f"   Full trace: {error_trace[-200:]}")
+
+    log_messages.append(f"\n[{pd.Timestamp.now()}] Model loading complete.")
+    log_messages.append(f"Loaded: {len(loaded_models)}/{len(registry)} models")
+    if failed_models:
+        log_messages.append(f"Failed: {len(failed_models)} models")
+        for name, err in failed_models:
+            log_messages.append(f"  - {name}: {err[:80]}")
 
     # Write log file
     with open(log_file, "w") as f:
@@ -215,13 +255,17 @@ DEFAULT_MODELS = MODEL_OPTIONS[: min(3, len(MODEL_OPTIONS))]
 
 
 def build_model_accuracy_table():
+    """
+    Display loaded models' metadata.
+    Accuracy shows historical validation accuracy from training.
+    Live confidence is shown in predictions.
+    """
     rows = []
     for model_name, model_bundle in MODELS.items():
         rows.append(
             {
                 "Model": MODEL_LABELS[model_name],
                 "Type": model_bundle["meta"].get("model_type", "tabular"),
-                "Accuracy": model_bundle["meta"].get("accuracy"),
                 "Description": model_bundle["meta"].get("description", ""),
             }
         )
@@ -229,7 +273,7 @@ def build_model_accuracy_table():
     leaderboard = pd.DataFrame(rows)
     if leaderboard.empty:
         return leaderboard
-    return leaderboard.sort_values("Accuracy", ascending=False, na_position="last").reset_index(drop=True)
+    return leaderboard.sort_values("Model", ascending=True).reset_index(drop=True)
 
 
 def normalize_prev_pitch(prev_pitch):
@@ -443,14 +487,19 @@ if not MODELS:
     st.error("No models are available. Build the model registry or upload model artifacts first.")
     st.stop()
 
-st.caption("Most recent saved evaluation accuracy for each available model.")
+if not TENSORFLOW_AVAILABLE:
+    st.warning(
+        \"⚠️ TensorFlow is not available. Sequence models (LSTM, Transformer) cannot be loaded. \"
+        \"Only tabular models are available.\"
+    )
+
+st.caption(f\"Available models: {len(MODELS)} loaded\")
 accuracy_table = build_model_accuracy_table()
 if not accuracy_table.empty:
     st.dataframe(
         accuracy_table,
         use_container_width=True,
         hide_index=True,
-        column_config={"Accuracy": st.column_config.NumberColumn(format="%.3f")},
     )
 
 tab1, tab2 = st.tabs(["Live Games", "Manual Setup"])
