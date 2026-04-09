@@ -140,9 +140,6 @@ def load_registry_models():
             print(f"  - {model_name}: {error}")
 
     return loaded_models
-        }
-
-    return loaded_models
 
 
 MODELS = load_registry_models()
