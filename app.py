@@ -1,7 +1,6 @@
 import json
 import sys
 import time
-import traceback
 from datetime import date
 from pathlib import Path
 
@@ -50,37 +49,48 @@ supabase = get_app_supabase_client()
 
 @st.cache_resource
 def load_model_registry():
+    local_registry = []
     if LOCAL_REGISTRY_PATH.exists():
         with open(LOCAL_REGISTRY_PATH, "r", encoding="utf-8") as file_obj:
             local_registry = json.load(file_obj)
 
-        local_registry_is_usable = True
-        for entry in local_registry:
-            if entry.get("source") == "huggingface":
-                continue
-
-            required_paths = [
-                entry.get("model_path"),
-                entry.get("label_encoder_path"),
-            ]
-            if entry.get("model_type") == "tabular":
-                required_paths.append(entry.get("feature_columns_path"))
-            else:
-                required_paths.append(entry.get("preprocessor_path"))
-
-            if not all(required_paths) or not all(Path(path).exists() for path in required_paths):
-                local_registry_is_usable = False
-                break
-
-        if local_registry_is_usable:
-            return local_registry
-
+    hf_registry = []
     try:
         registry_path = hf_hub_download(repo_id=MODEL_REPO_ID, filename="model_registry.json")
         with open(registry_path, "r", encoding="utf-8") as file_obj:
-            return json.load(file_obj)
+            hf_registry = json.load(file_obj)
     except Exception:
-        pass
+        hf_registry = []
+
+    # Prefer Hugging Face entries when available, but include local-only models.
+    if hf_registry and local_registry:
+        local_by_name = {entry.get("name"): entry for entry in local_registry if entry.get("name")}
+        merged_registry = []
+        seen_names = set()
+
+        for hf_entry in hf_registry:
+            name = hf_entry.get("name")
+            if not name:
+                continue
+            merged_entry = dict(local_by_name.get(name, {}))
+            merged_entry.update(hf_entry)
+            if "source" not in merged_entry:
+                merged_entry["source"] = "huggingface"
+            merged_registry.append(merged_entry)
+            seen_names.add(name)
+
+        for local_entry in local_registry:
+            name = local_entry.get("name")
+            if name and name not in seen_names:
+                merged_registry.append(local_entry)
+
+        return merged_registry
+
+    if hf_registry:
+        return hf_registry
+
+    if local_registry:
+        return local_registry
 
     return [
         {
@@ -96,10 +106,19 @@ def load_model_registry():
     ]
 
 
-def load_artifact(entry, filename_key, path_key):
-    if entry.get("source") == "huggingface":
-        return hf_hub_download(repo_id=MODEL_REPO_ID, filename=entry[filename_key])
-    return entry[path_key]
+def resolve_artifact_path(entry, filename_key, path_key):
+    local_path = entry.get(path_key)
+    if local_path and Path(local_path).exists():
+        return local_path
+
+    filename = entry.get(filename_key)
+    if filename:
+        return hf_hub_download(repo_id=MODEL_REPO_ID, filename=filename)
+
+    if local_path:
+        return local_path
+
+    raise KeyError(f"Missing artifact reference for {entry.get('name')}: {filename_key} / {path_key}")
 
 
 @st.cache_resource
@@ -120,89 +139,62 @@ def load_model_artifacts(model_name, model_type, model_path, label_encoder_path,
 
 
 @st.cache_resource
-def load_registry_models():
-    registry = [entry for entry in load_model_registry() if entry.get("active", True)]
-    loaded_models = {}
-    failed_models = []
-    
-    # Log file for diagnostics (helpful for Streamlit Cloud)
-    log_file = Path("model_loading_log.txt")
-    log_messages = []
-    log_messages.append(f"[{pd.Timestamp.now()}] Starting model loading for {len(registry)} models...")
+def get_model_bundle(
+    model_name,
+    model_type,
+    model_filename,
+    label_encoder_filename,
+    feature_columns_filename,
+    preprocessor_filename,
+    model_path,
+    label_encoder_path,
+    feature_columns_path,
+    preprocessor_path,
+):
+    entry = {
+        "name": model_name,
+        "model_filename": model_filename,
+        "label_encoder_filename": label_encoder_filename,
+        "feature_columns_filename": feature_columns_filename,
+        "preprocessor_filename": preprocessor_filename,
+        "model_path": model_path,
+        "label_encoder_path": label_encoder_path,
+        "feature_columns_path": feature_columns_path,
+        "preprocessor_path": preprocessor_path,
+    }
 
-    for entry in registry:
-        model_name = entry["name"]
-        model_type = entry.get("model_type", "tabular")
-        try:
-            log_messages.append(f"\n[{pd.Timestamp.now()}] Loading {model_name} ({model_type})...")
-            
-            # Try to load model artifacts
-            model_path = load_artifact(entry, "model_filename", "model_path")
-            log_messages.append(f"  -> Model path: {model_path}")
-            
-            label_encoder_path = load_artifact(entry, "label_encoder_filename", "label_encoder_path")
-            log_messages.append(f"  → Label encoder path: {label_encoder_path}")
-            
-            feature_path = None
-            preprocessor_path = None
+    resolved_model_path = resolve_artifact_path(entry, "model_filename", "model_path")
+    resolved_label_encoder_path = resolve_artifact_path(entry, "label_encoder_filename", "label_encoder_path")
+    resolved_feature_path = None
+    resolved_preprocessor_path = None
 
-            if entry.get("feature_columns_filename"):
-                feature_path = load_artifact(entry, "feature_columns_filename", "feature_columns_path")
-                log_messages.append(f"  -> Feature columns path: {feature_path}")
-                
-            if entry.get("preprocessor_filename"):
-                preprocessor_path = load_artifact(entry, "preprocessor_filename", "preprocessor_path")
-                log_messages.append(f"  -> Preprocessor path: {preprocessor_path}")
+    if feature_columns_filename or feature_columns_path:
+        resolved_feature_path = resolve_artifact_path(entry, "feature_columns_filename", "feature_columns_path")
 
-            # Load model artifacts
-            log_messages.append(f"  -> Loading model artifacts...")
-            model, label_encoder, feature_artifact, preprocessor = load_model_artifacts(
-                model_name,
-                model_type,
-                model_path,
-                label_encoder_path,
-                feature_path,
-                preprocessor_path,
-            )
-            log_messages.append(f"  -> Model type: {type(model).__name__}")
+    if preprocessor_filename or preprocessor_path:
+        resolved_preprocessor_path = resolve_artifact_path(entry, "preprocessor_filename", "preprocessor_path")
 
-            loaded_models[entry["name"]] = {
-                "meta": entry,
-                "model": model,
-                "label_encoder": label_encoder,
-                "feature_columns": feature_artifact,
-                "preprocessor": preprocessor,
-            }
-            log_messages.append(f"[OK] Successfully loaded {model_name}")
-        except Exception as e:
-            import traceback
-            failed_models.append((model_name, str(e)))
-            error_trace = traceback.format_exc()
-            log_messages.append(f"[ERROR] Failed to load {model_name}:")
-            log_messages.append(f"   Error: {type(e).__name__}: {str(e)}")
-            log_messages.append(f"   Full trace: {error_trace[-200:]}")
+    model, label_encoder, feature_artifact, preprocessor = load_model_artifacts(
+        model_name,
+        model_type,
+        resolved_model_path,
+        resolved_label_encoder_path,
+        resolved_feature_path,
+        resolved_preprocessor_path,
+    )
 
-    log_messages.append(f"\n[{pd.Timestamp.now()}] Model loading complete.")
-    log_messages.append(f"Loaded: {len(loaded_models)}/{len(registry)} models")
-    if failed_models:
-        log_messages.append(f"Failed: {len(failed_models)} models")
-        for name, err in failed_models:
-            log_messages.append(f"  - {name}: {err[:80]}")
-
-    # Write log file (UTF-8 encoding for Unicode support)
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write("\n".join(log_messages))
-    
-    # Print to console (visible in local terminal)
-    print("\n".join(log_messages))
-    
-    if failed_models:
-        print(f"\n[WARNING] Failed to load {len(failed_models)} models (see model_loading_log.txt)")
-
-    return loaded_models
+    return {
+        "meta": dict(entry),
+        "model": model,
+        "label_encoder": label_encoder,
+        "feature_columns": feature_artifact,
+        "preprocessor": preprocessor,
+    }
 
 
-MODELS = load_registry_models()
+MODEL_REGISTRY = load_model_registry()
+ACTIVE_MODEL_ENTRIES = [entry for entry in MODEL_REGISTRY if entry.get("active", True) and entry.get("name")]
+ACTIVE_MODEL_MAP = {entry["name"]: entry for entry in ACTIVE_MODEL_ENTRIES}
 
 
 def load_tendency_table(filename):
@@ -249,24 +241,25 @@ def load_pitcher_data():
 
 pitcher_list, pitcher_handedness = load_pitcher_data()
 
-MODEL_LABELS = {model_name: model_name.replace("_", " ").title() for model_name in MODELS}
-MODEL_OPTIONS = list(MODELS.keys())
+MODEL_LABELS = {model_name: model_name.replace("_", " ").title() for model_name in ACTIVE_MODEL_MAP}
+MODEL_OPTIONS = list(ACTIVE_MODEL_MAP.keys())
 DEFAULT_MODELS = MODEL_OPTIONS[: min(3, len(MODEL_OPTIONS))]
 
 
 def build_model_accuracy_table():
     """
-    Display loaded models' metadata.
+    Display active registry models' metadata.
     Accuracy shows historical validation accuracy from training.
     Live confidence is shown in predictions.
     """
     rows = []
-    for model_name, model_bundle in MODELS.items():
+    for model_name in MODEL_OPTIONS:
+        model_entry = ACTIVE_MODEL_MAP[model_name]
         rows.append(
             {
                 "Model": MODEL_LABELS[model_name],
-                "Type": model_bundle["meta"].get("model_type", "tabular"),
-                "Description": model_bundle["meta"].get("description", ""),
+                "Type": model_entry.get("model_type", "tabular"),
+                "Description": model_entry.get("description", ""),
             }
         )
 
@@ -403,8 +396,20 @@ def predict_with_sequence_model(model_bundle, features_df, recent_pitches, fallb
 
 
 def predict_with_model(model_name, features_df, recent_pitches=None, fallback_state=None):
-    model_bundle = MODELS[model_name]
-    model_type = model_bundle["meta"].get("model_type", "tabular")
+    model_entry = ACTIVE_MODEL_MAP[model_name]
+    model_type = model_entry.get("model_type", "tabular")
+    model_bundle = get_model_bundle(
+        model_name=model_name,
+        model_type=model_type,
+        model_filename=model_entry.get("model_filename"),
+        label_encoder_filename=model_entry.get("label_encoder_filename"),
+        feature_columns_filename=model_entry.get("feature_columns_filename"),
+        preprocessor_filename=model_entry.get("preprocessor_filename"),
+        model_path=model_entry.get("model_path"),
+        label_encoder_path=model_entry.get("label_encoder_path"),
+        feature_columns_path=model_entry.get("feature_columns_path"),
+        preprocessor_path=model_entry.get("preprocessor_path"),
+    )
 
     if model_type == "tabular":
         return predict_with_tabular_model(model_bundle, model_name, features_df)
@@ -420,6 +425,7 @@ def predict_with_model(model_name, features_df, recent_pitches=None, fallback_st
 def predict_pitch(selected_models, recent_pitches=None, **kwargs):
     features_df = build_prediction_features(**kwargs)
     results = {}
+    errors = {}
 
     fallback_state = {
         "balls": kwargs["balls"],
@@ -432,26 +438,33 @@ def predict_pitch(selected_models, recent_pitches=None, **kwargs):
     }
 
     for model_name in selected_models:
-        pitch_code, proba_df = predict_with_model(
-            model_name,
-            features_df,
-            recent_pitches=recent_pitches,
-            fallback_state=fallback_state,
-        )
-        results[model_name] = {
-            "pitch_code": pitch_code,
-            "probabilities": proba_df,
-        }
+        try:
+            pitch_code, proba_df = predict_with_model(
+                model_name,
+                features_df,
+                recent_pitches=recent_pitches,
+                fallback_state=fallback_state,
+            )
+            results[model_name] = {
+                "pitch_code": pitch_code,
+                "probabilities": proba_df,
+            }
+        except Exception as exc:
+            errors[model_name] = f"{type(exc).__name__}: {exc}"
 
-    return results
+    return results, errors
 
 
 def render_prediction_results(results):
+    if not results:
+        st.warning("No model predictions were produced. Check model availability and artifact access.")
+        return
+
     if len(results) == 1:
         model_name, result = next(iter(results.items()))
         st.success(f"{MODEL_LABELS[model_name]}: **{PITCH_NAMES.get(result['pitch_code'], result['pitch_code'])}**")
         if result["probabilities"] is not None:
-            st.dataframe(result["probabilities"], use_container_width=True)
+            st.dataframe(result["probabilities"], width="stretch")
         return
 
     summary_rows = []
@@ -468,37 +481,38 @@ def render_prediction_results(results):
         summary_rows.append(
             {
                 "Model": MODEL_LABELS[model_name],
-                "Type": MODELS[model_name]["meta"].get("model_type", "tabular"),
+                "Type": ACTIVE_MODEL_MAP[model_name].get("model_type", "tabular"),
                 "Confidence": confidence,
                 "Predicted Pitch": predicted_pitch_name,
             }
         )
 
-    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True)
+    st.dataframe(pd.DataFrame(summary_rows), width="stretch")
 
     for model_name, result in results.items():
         if result["probabilities"] is not None:
             st.subheader(f"{MODEL_LABELS[model_name]} probabilities")
-            st.dataframe(result["probabilities"], use_container_width=True)
+            st.dataframe(result["probabilities"], width="stretch")
 
 
 st.title("MLB Pitch Predictor")
-if not MODELS:
+if not MODEL_OPTIONS:
     st.error("No models are available. Build the model registry or upload model artifacts first.")
     st.stop()
 
-if not TENSORFLOW_AVAILABLE:
+has_sequence_models = any(entry.get("model_type", "tabular") != "tabular" for entry in ACTIVE_MODEL_ENTRIES)
+if has_sequence_models and not TENSORFLOW_AVAILABLE:
     st.warning(
         "⚠️ TensorFlow is not available. Sequence models (LSTM, Transformer) cannot be loaded. "
         "Only tabular models are available."
     )
 
-st.caption(f"Available models: {len(MODELS)} loaded")
+st.caption(f"Available models: {len(MODEL_OPTIONS)} active from registry")
 accuracy_table = build_model_accuracy_table()
 if not accuracy_table.empty:
     st.dataframe(
         accuracy_table,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -556,10 +570,10 @@ with tab1:
                 if state["recent_pitches"]:
                     st.subheader("Current At-Bat")
                     recent_df = pd.DataFrame(state["recent_pitches"])
-                    st.dataframe(recent_df, use_container_width=True)
+                    st.dataframe(recent_df, width="stretch")
 
                 st.subheader("Next Pitch Prediction")
-                results = predict_pitch(
+                results, errors = predict_pitch(
                     live_selected_models,
                     recent_pitches=state["recent_pitches"],
                     pitcher=state["pitcher"],
@@ -575,6 +589,10 @@ with tab1:
                     prev_pitch=state["prev_pitch"],
                     score_diff=state["score_diff"],
                 )
+
+                if errors:
+                    st.warning("Some selected models failed to run: " + ", ".join(errors.keys()))
+
                 render_prediction_results(results)
 
                 if auto_refresh:
@@ -625,7 +643,7 @@ with tab2:
                         "play_event_index": 0,
                     }
                 ]
-                results = predict_pitch(
+                results, errors = predict_pitch(
                     manual_selected_models,
                     recent_pitches=manual_history,
                     pitcher=pitcher,
@@ -641,4 +659,8 @@ with tab2:
                     prev_pitch=prev_pitch,
                     score_diff=score_diff,
                 )
+
+                if errors:
+                    st.warning("Some selected models failed to run: " + ", ".join(errors.keys()))
+
                 render_prediction_results(results)
