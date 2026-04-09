@@ -21,10 +21,19 @@ LOCAL_REGISTRY_PATH = Path("models/model_registry.json")
 LOCAL_DATA_DIR = Path("data")
 
 def get_app_supabase_client():
+    """Get Supabase client for Streamlit app using publishable key (respects RLS)."""
     url = st.secrets["SUPABASE_URL"]
-    key = st.secrets.get("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_KEY")
+    # Try modern key first, then fall back to legacy keys
+    key = (
+        st.secrets.get("SUPABASE_PUBLISHABLE_KEY") or
+        st.secrets.get("SUPABASE_ANON_KEY") or
+        st.secrets.get("SUPABASE_KEY")
+    )
     if not key:
-        raise KeyError("Missing SUPABASE_ANON_KEY (or legacy SUPABASE_KEY) in Streamlit secrets.")
+        raise KeyError(
+            "Missing SUPABASE_PUBLISHABLE_KEY in Streamlit secrets. "
+            "(Or legacy SUPABASE_ANON_KEY / SUPABASE_KEY for backward compatibility.)"
+        )
     return create_client(url, key)
 
 
