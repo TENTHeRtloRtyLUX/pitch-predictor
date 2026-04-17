@@ -35,8 +35,7 @@ jobs:
     timeout-minutes: 120
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       RETRAIN_START_YEAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.start_year || '2023' }}
       RETRAIN_SEASONS_OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.seasons || '' }}
@@ -183,8 +182,7 @@ jobs:
     timeout-minutes: 120
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       ACCURACY_DROP_THRESHOLD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.accuracy_drop_threshold || '0.02' }}
       UPLOAD_ENABLED: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.upload_enabled || 'false' }}

@@ -14,7 +14,7 @@ def _require_env(name: str) -> str:
 def get_supabase_service_client():
     """Get a Supabase client with secret key (bypasses RLS).
     
-    Uses modern SUPABASE_SECRET_KEY (recommended) with fallback to legacy keys.
+    Uses SUPABASE_SECRET_KEY.
     
     Use this for:
     - System operations (upserting data, managing pipeline state)
@@ -23,24 +23,16 @@ def get_supabase_service_client():
     Warning: This client ignores all RLS policies.
     """
     url = _require_env("SUPABASE_URL")
-    # Try modern key first, then fall back to legacy keys
-    key = (
-        os.getenv("SUPABASE_SECRET_KEY") or
-        os.getenv("SUPABASE_SERVICE_ROLE_KEY") or
-        os.getenv("SUPABASE_KEY")
-    )
+    key = os.getenv("SUPABASE_SECRET_KEY")
     if not key:
-        raise ValueError(
-            "Missing SUPABASE_SECRET_KEY in environment. "
-            "(Or legacy SUPABASE_SERVICE_ROLE_KEY / SUPABASE_KEY for backward compatibility.)"
-        )
+        raise ValueError("Missing SUPABASE_SECRET_KEY in environment.")
     return create_client(url, key)
 
 
 def get_supabase_authenticated_client(user_id: Optional[str] = None):
     """Get a Supabase client with publishable key that respects RLS policies.
     
-    Uses modern SUPABASE_PUBLISHABLE_KEY (recommended) with fallback to legacy keys.
+    Uses SUPABASE_PUBLISHABLE_KEY.
     
     Use this for:
     - User-facing queries (Streamlit app, frontend)
@@ -54,17 +46,9 @@ def get_supabase_authenticated_client(user_id: Optional[str] = None):
         Supabase client respecting RLS policies
     """
     url = _require_env("SUPABASE_URL")
-    # Try modern key first, then fall back to legacy keys
-    key = (
-        os.getenv("SUPABASE_PUBLISHABLE_KEY") or
-        os.getenv("SUPABASE_ANON_KEY") or
-        os.getenv("SUPABASE_KEY")
-    )
+    key = os.getenv("SUPABASE_PUBLISHABLE_KEY")
     if not key:
-        raise ValueError(
-            "Missing SUPABASE_PUBLISHABLE_KEY in environment. "
-            "(Or legacy SUPABASE_ANON_KEY / SUPABASE_KEY for backward compatibility.)"
-        )
+        raise ValueError("Missing SUPABASE_PUBLISHABLE_KEY in environment.")
     client = create_client(url, key)
     
     # If user_id is provided, set it in the RLS context

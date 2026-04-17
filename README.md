@@ -146,8 +146,8 @@ The repo includes a weekly scheduled workflow and manual dispatch entrypoint in 
 Required secrets:
 
 - `SUPABASE_URL`
-- `SUPABASE_SECRET_KEY` for ingest and retraining jobs (modern) or legacy `SUPABASE_SERVICE_ROLE_KEY`
-- `SUPABASE_PUBLISHABLE_KEY` for the deployed Streamlit app (modern) or legacy `SUPABASE_ANON_KEY`
+- `SUPABASE_SECRET_KEY` for ingest and retraining jobs
+- `SUPABASE_PUBLISHABLE_KEY` for the deployed Streamlit app
 - `HF_TOKEN` for uploading models to Hugging Face
 
 Artifacts uploaded on every run:
