@@ -26,6 +26,11 @@ from training_data_pipeline import build_sequence_inference_inputs
 MODEL_REPO_ID = "rkhosla/pitch-predictor"
 LOCAL_REGISTRY_PATH = Path("models/model_registry.json")
 LOCAL_DATA_DIR = Path("data")
+LOCAL_PITCHER_DATA_FILES = [
+    LOCAL_DATA_DIR / "training_data.csv",
+    LOCAL_DATA_DIR / "clean_full_pitches.csv",
+    LOCAL_DATA_DIR / "clean_pitches.csv",
+]
 
 def get_app_supabase_client():
     """Get Supabase client for Streamlit app using publishable key (respects RLS)."""
@@ -36,7 +41,11 @@ def get_app_supabase_client():
     return create_client(url, key)
 
 
-supabase = get_app_supabase_client()
+try:
+    supabase = get_app_supabase_client()
+except Exception as exc:
+    supabase = None
+    print(f"⚠️  Supabase client unavailable; using local fallback data where possible: {exc}")
 
 
 @st.cache_resource
@@ -192,8 +201,16 @@ ACTIVE_MODEL_MAP = {entry["name"]: entry for entry in ACTIVE_MODEL_ENTRIES}
 def load_tendency_table(filename):
     local_path = LOCAL_DATA_DIR / filename
     if local_path.exists():
-        return pd.read_csv(local_path)
-    return pd.read_csv(hf_hub_download(repo_id=MODEL_REPO_ID, filename=filename))
+        try:
+            return pd.read_csv(local_path)
+        except Exception as exc:
+            print(f"⚠️  Failed to read local tendency table {local_path}: {exc}")
+
+    try:
+        return pd.read_csv(hf_hub_download(repo_id=MODEL_REPO_ID, filename=filename))
+    except Exception as exc:
+        print(f"⚠️  Failed to load tendency table {filename} from Hugging Face: {exc}")
+        return pd.DataFrame()
 
 
 overall_tendencies = load_tendency_table("pitcher_overall_tendencies.csv")
@@ -201,34 +218,86 @@ hand_tendencies = load_tendency_table("pitcher_hand_tendencies.csv")
 count_tendencies = load_tendency_table("pitcher_count_tendencies.csv")
 
 
+def get_games_on_date_safe(game_date):
+    try:
+        return get_games_on_date(game_date)
+    except Exception as exc:
+        print(f"⚠️  Unable to load games for {game_date}: {exc}")
+        return []
+
+
+def get_live_game_state_safe(game_id):
+    try:
+        return get_live_game_state(game_id)
+    except Exception as exc:
+        print(f"⚠️  Unable to load live game state for {game_id}: {exc}")
+        return None
+
+
 @st.cache_resource
 def load_pitcher_data():
-    all_pitchers = []
-    page = 0
-    page_size = 1000
+    def _load_local_pitchers():
+        for local_path in LOCAL_PITCHER_DATA_FILES:
+            if not local_path.exists():
+                continue
 
-    while True:
-        response = supabase.table("pitchers").select("name, throws").range(
-            page * page_size,
-            (page + 1) * page_size - 1,
-        ).execute()
+            pitcher_df = pd.read_csv(
+                local_path,
+                usecols=lambda column: column in {"pitcher_name", "p_throws", "throws", "name"},
+            )
 
-        if not response.data:
-            break
+            name_column = None
+            handedness_column = None
+            for candidate_name in ("pitcher_name", "name"):
+                if candidate_name in pitcher_df.columns:
+                    name_column = candidate_name
+                    break
+            for candidate_handedness in ("p_throws", "throws"):
+                if candidate_handedness in pitcher_df.columns:
+                    handedness_column = candidate_handedness
+                    break
 
-        all_pitchers.extend(response.data)
-        page += 1
+            if not name_column or not handedness_column:
+                continue
 
-    if not all_pitchers:
+            pitcher_df = pitcher_df[[name_column, handedness_column]].dropna(subset=[name_column]).drop_duplicates()
+            pitcher_df = pitcher_df.rename(columns={name_column: "name", handedness_column: "throws"})
+            pitcher_df["throws"] = pitcher_df["throws"].fillna("R")
+            pitcher_list = sorted(pitcher_df["name"].astype(str).tolist())
+            pitcher_handedness = dict(zip(pitcher_df["name"].astype(str), pitcher_df["throws"].astype(str)))
+            if pitcher_list:
+                return pitcher_list, pitcher_handedness
+
         return [], {}
 
-    pitcher_df = pd.DataFrame(all_pitchers)
-    if "name" not in pitcher_df.columns or "throws" not in pitcher_df.columns:
-        return [], {}
+    if supabase is not None:
+        all_pitchers = []
+        page = 0
+        page_size = 1000
 
-    pitcher_list = sorted(pitcher_df["name"].tolist())
-    pitcher_handedness = dict(zip(pitcher_df["name"], pitcher_df["throws"]))
-    return pitcher_list, pitcher_handedness
+        try:
+            while True:
+                response = supabase.table("pitchers").select("name, throws").range(
+                    page * page_size,
+                    (page + 1) * page_size - 1,
+                ).execute()
+
+                if not response.data:
+                    break
+
+                all_pitchers.extend(response.data)
+                page += 1
+
+            if all_pitchers:
+                pitcher_df = pd.DataFrame(all_pitchers)
+                if "name" in pitcher_df.columns and "throws" in pitcher_df.columns:
+                    pitcher_list = sorted(pitcher_df["name"].astype(str).tolist())
+                    pitcher_handedness = dict(zip(pitcher_df["name"].astype(str), pitcher_df["throws"].astype(str)))
+                    return pitcher_list, pitcher_handedness
+        except Exception as exc:
+            print(f"⚠️  Falling back to local pitcher data after Supabase query failed: {exc}")
+
+    return _load_local_pitchers()
 
 
 pitcher_list, pitcher_handedness = load_pitcher_data()
@@ -523,7 +592,7 @@ with tab1:
     )
 
     today = st.date_input("Game date", value=date.today()).strftime("%Y-%m-%d")
-    games = get_games_on_date(today)
+    games = get_games_on_date_safe(today)
 
     if not games:
         st.warning("No games found today.")
@@ -538,7 +607,7 @@ with tab1:
         auto_refresh = st.toggle("Auto-refresh every 10 seconds", value=False)
 
         if st.button("Load Game") or auto_refresh:
-            state = get_live_game_state(game_id)
+            state = get_live_game_state_safe(game_id)
 
             if not state:
                 st.warning("No live data available for this game yet.")
